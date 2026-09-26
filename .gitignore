@@ -1,0 +1,10 @@
+# 依存
+node_modules/
+
+# ハーネスの実行時の状態（計画 5 章）
+.harness/
+
+# スパイクの実行時の出力
+spikes/**/*.out
+spikes/**/spike-events.jsonl
+spikes/**/mock-hits.log
