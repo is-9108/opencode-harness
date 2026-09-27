@@ -55,6 +55,12 @@ test("一部だけ指定したセクションは、指定しなかったキー�
   assert.equal(result.config?.loops.reviewFix, 3)
 })
 
+test("setup.install は省略でき、指定するなら空でない文字列にする", () => {
+  assert.equal(validateConfig(minimal()).config?.setup.install, undefined)
+  assert.equal(validateConfig({ ...minimal(), setup: { install: "npm ci" } }).config?.setup.install, "npm ci")
+  assert.match(errorsOf({ ...minimal(), setup: { install: "" } }), /setup.install/)
+})
+
 test("JSON として壊れていれば invalid を返す", () => {
   const result = loadConfig(tempRoot(undefined, "{ \"models\": "))
   assert.equal(result.status, "invalid")

@@ -6,6 +6,7 @@ import { join } from "node:path"
 import { advance, record, type StepDeps } from "../machine/dev.ts"
 import { createStore, startRun } from "../state.ts"
 import { validateConfig } from "../config.ts"
+import { noShell } from "./fakes.ts"
 import type { ChildResult, RunChildOptions } from "../session.ts"
 
 const VALID_PLAN = `---
@@ -60,7 +61,7 @@ const setup = (writes: (string | undefined)[], opts: { models?: Record<string, s
   })
   assert.ok(config)
   const child = fakeChild(worktree, writes, opts.childResult)
-  const deps: StepDeps = { root, config, store, exec: async () => ({ code: 0, stdout: "", stderr: "" }), child: child.run }
+  const deps: StepDeps = { root, config, store, exec: async () => ({ code: 0, stdout: "", stderr: "" }), shell: noShell, child: child.run }
   const planPath = join(worktree, ".harness", "run", "01-plan.md")
   return { deps, store, child, worktree, planPath, runId: run.id }
 }

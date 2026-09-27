@@ -1,16 +1,19 @@
 // dev の run の状態機械（計画 8.2）。harness_advance から呼ばれ、現在の工程を 1 つだけ進める
 import type { HarnessConfig } from "../config.ts"
-import type { Exec } from "../exec.ts"
+import type { Exec, Shell } from "../exec.ts"
 import type { ChildResult, RunChildOptions } from "../session.ts"
 import type { Store } from "../state.ts"
 import { runSetup } from "../steps/setup.ts"
 import { recordPlan, runPlan, waitApproval } from "../steps/plan.ts"
+import { runRed } from "../steps/red.ts"
 
 export type StepDeps = {
   root: string
   config: HarnessConfig
   store: Store
   exec: Exec
+  // checks に書かれたコマンドの実行（シェル経由）
+  shell: Shell
   // 子セッションの実行。プラグイン側で親セッション・中断シグナル・記録先を結びつけて渡す
   child: (opts: Omit<RunChildOptions, "parentID" | "signal"> & { runId: string }) => Promise<ChildResult>
   now?: () => Date
@@ -26,6 +29,7 @@ export async function advance(deps: StepDeps, runId: string): Promise<StepResult
   const run = deps.store.get(runId)
   if (!run) return { kind: "error", message: `run ${runId} がありません。harness_start で作成してください` }
   if (run.status === "interrupted") return { kind: "error", message: `${runId} は中断されています` }
+  if (run.status === "escalated") return { kind: "escalated", message: `${runId} はエスカレーションされています（工程: ${run.step}）。/fix で対応してください` }
   switch (run.step) {
     case "setup":
       return runSetup(deps, run)
@@ -33,6 +37,8 @@ export async function advance(deps: StepDeps, runId: string): Promise<StepResult
       return runPlan(deps, run)
     case "approval":
       return waitApproval(run)
+    case "red":
+      return runRed(deps, run)
     default:
       return { kind: "error", message: `工程 ${run.step} はまだ実装されていません` }
   }

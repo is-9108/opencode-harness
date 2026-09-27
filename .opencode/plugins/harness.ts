@@ -8,7 +8,7 @@ import { createStore, startRun } from "../harness/state.ts"
 import { createEventBus, runChild, type PermissionRule } from "../harness/session.ts"
 import { createSessionApi } from "../harness/sdk-adapter.ts"
 import { advance, record, type StepDeps } from "../harness/machine/dev.ts"
-import { realExec } from "../harness/exec.ts"
+import { realExec, realShell } from "../harness/exec.ts"
 
 type Ctx = { worktree: string; directory: string }
 type ToolCtx = Ctx & { sessionID: string; abort: AbortSignal; metadata(input: { title?: string }): void }
@@ -29,6 +29,7 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
       config: load.config,
       store,
       exec: realExec,
+      shell: realShell,
       child: ({ runId, ...opts }) =>
         runChild(
           { api, events, log: (e) => store.appendEvent(runId, e), progress: (title) => context.metadata({ title }) },

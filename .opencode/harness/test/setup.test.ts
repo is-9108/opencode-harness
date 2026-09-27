@@ -9,6 +9,7 @@ import { advance } from "../machine/dev.ts"
 import { slugify } from "../steps/setup.ts"
 import { createStore, startRun } from "../state.ts"
 import { validateConfig } from "../config.ts"
+import { noShell } from "./fakes.ts"
 import { realExec, type Exec } from "../exec.ts"
 
 const git = (cwd: string, ...args: string[]) =>
@@ -51,16 +52,23 @@ const config = () => {
   return config
 }
 
-const setup = (issue: GhIssue | undefined, number = 12) => {
+const setup = (issue: GhIssue | undefined, number = 12, opts: { install?: string; installCode?: number } = {}) => {
   const root = tempRepo()
   const store = createStore(root)
   startRun(store, { kind: "dev", issue: number })
   const { exec, calls } = fakeExec(issue)
   // setup の工程では子セッションを使わない
   const child = async (): Promise<never> => { throw new Error("setup で子セッションは呼ばれないはず") }
-  const deps = { root, config: config(), store, exec, child }
+  const shellCalls: { command: string; cwd: string }[] = []
+  const shell = async (command: string, o: { cwd: string }) => {
+    shellCalls.push({ command, cwd: o.cwd })
+    return { code: opts.installCode ?? 0, stdout: "", stderr: "npm ERR! missing lockfile", timedOut: false, durationMs: 1 }
+  }
+  const base = config()
+  const cfg = opts.install ? { ...base, setup: { ...base.setup, install: opts.install } } : base
+  const deps = { root, config: cfg, store, exec, shell: opts.install ? shell : noShell, child }
   const worktree = join(dirname(root), `${basename(root)}.worktrees`, `issue-${number}`)
-  return { root, store, deps, calls, worktree, runId: `issue-${number}` }
+  return { root, store, deps, calls, shellCalls, worktree, runId: `issue-${number}` }
 }
 
 test("開いている issue の setup で、worktree とブランチを作り、issue のスナップショットを保存して continue を返す", async () => {
@@ -153,4 +161,20 @@ test("slug はタイトルを英小文字・数字・ハイフンにし、長す
   const long = slugify("a".repeat(30) + " " + "b".repeat(30))
   assert.ok(long.length <= 40)
   assert.doesNotMatch(long, /-$/)
+})
+
+test("setup.install が設定されていれば、worktree の中で依存をインストールする（node_modules は worktree にコピーされないため）", async () => {
+  const { deps, shellCalls, worktree, runId } = setup(openIssue, 12, { install: "npm ci" })
+  const result = await advance(deps, runId)
+  assert.equal(result.kind, "continue")
+  assert.deepEqual(shellCalls, [{ command: "npm ci", cwd: worktree }])
+})
+
+test("依存のインストールに失敗したら、出力の末尾を添えてエラーを返し、工程は setup のままにする", async () => {
+  const { store, deps, runId } = setup(openIssue, 12, { install: "npm ci", installCode: 1 })
+  const result = await advance(deps, runId)
+  assert.equal(result.kind, "error")
+  assert.match(result.message, /npm ci/)
+  assert.match(result.message, /missing lockfile/)
+  assert.equal(store.get(runId)?.step, "setup")
 })
