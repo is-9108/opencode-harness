@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { advance, type StepDeps } from "../machine/dev.ts"
-import { parseReview } from "../steps/review.ts"
+import { findingKey, parseReview } from "../steps/review.ts"
 import { createStore, startRun } from "../state.ts"
 import { validateConfig } from "../config.ts"
 import { realExec } from "../exec.ts"
@@ -147,18 +147,42 @@ test("レビューの入力として、ベースからの差分（.opencode を�
   assert.ok(rules.some((r) => r.permission === "edit" && r.action === "allow" && r.pattern.endsWith("spec.md")))
 })
 
-test("根拠のある blocking の指摘があれば、M1 では escalated にし、指摘の内容を示す", async () => {
+test("根拠のある blocking の指摘があれば、指摘の内容を示して review-fix に進む（#37）", async () => {
   const { deps, store, roundDir, runId } = setup([review([VIOLATION, NO_EVIDENCE])])
   const result = await advance(deps, runId)
-  assert.equal(result.kind, "escalated")
+  assert.equal(result.kind, "continue")
   assert.match(result.message, /F-01.*AC-2.*src\/slug\.ts:2/)
   const summary = readFileSync(join(roundDir, "summary.md"), "utf8")
   assert.match(summary, /blocking_count: 1/)
   assert.match(summary, /F-02.*根拠/)
-  assert.equal(store.get(runId)?.status, "escalated")
+  const run = store.get(runId)
+  assert.equal(run?.step, "review-fix")
+  // 回数は工程に入る前に加算して保存する
+  assert.equal(run?.reviewFix, 1)
+  assert.equal(run?.autoFixUsed, 1)
+  // 指摘の ID（観点 + AC + ファイル）の出現の履歴を持つ
+  assert.deepEqual(run?.findingRounds, { "spec:AC-2:src/slug.ts": [1] })
+})
+
+test("human モードの run では、blocking の指摘があっても review-fix を実行せずにエスカレーションする（#37 AC-4）", async () => {
+  const { deps, store, calls, runId } = setup([review([VIOLATION])])
+  store.save({ ...store.get(runId)!, mode: "human" })
+  const result = await advance(deps, runId)
+  assert.equal(result.kind, "escalated")
+  assert.match(result.message, /human モード/)
+  assert.equal(calls.length, 1)
+  const run = store.get(runId)
+  assert.equal(run?.lastEscalation?.reason, "loop_exhausted")
+  assert.equal(run?.reviewFix, undefined)
+  assert.equal(run?.step, "review")
   // エスカレーションの報告に、未解決の論点として指摘を載せる（#33）
-  assert.match(readFileSync(store.get(runId)?.lastEscalation?.report ?? "", "utf8"), /## 未解決の論点[\s\S]*F-01/)
-  assert.equal(store.get(runId)?.step, "review")
+  assert.match(readFileSync(run?.lastEscalation?.report ?? "", "utf8"), /## 未解決の論点[\s\S]*F-01/)
+})
+
+test("指摘の ID は、観点・最初の AC の ID・根拠のファイルから作り、行番号の違いは同じ指摘とみなす", () => {
+  assert.equal(findingKey("spec", "AC-2", "src/slug.ts:12"), "spec:AC-2:src/slug.ts")
+  assert.equal(findingKey("spec", "AC-2, AC-3", "./src\\slug.ts:40"), "spec:AC-2:src/slug.ts")
+  assert.equal(findingKey("spec", "-", "-"), "spec:-:-")
 })
 
 test("レビューが不完全なら同じ子セッションに 1 回だけ直させ、それでも不完全ならエラーにする", async () => {

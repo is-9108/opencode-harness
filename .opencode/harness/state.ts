@@ -43,8 +43,12 @@ export type RunState = {
   // テストの変更申請（#36）。判断を待っている申請と、却下されて test-fix に伝える申請
   pendingChangeRequest?: string
   rejectedChangeRequest?: string
-  // review を実行した回数（reviews/round-<n>/ の n）
+  // review を実行した回数（reviews/round-<n>/ の n）と、最後にレビューした commit（2 周目以降の差分の基準）
   reviewRounds?: number
+  reviewedCommit?: string
+  // review-fix の回数（リセットしない）と、blocking の指摘の ID ごとに、出た周の履歴（再発の検知に使う。#37）
+  reviewFix?: number
+  findingRounds?: Record<string, number[]>
   // human: エスカレーションの後。以降は review-fix を自動で実行しない（戻さない。計画 8.3）
   mode?: "auto" | "human"
   // エスカレーションした回数と、最後のエスカレーション（#33）

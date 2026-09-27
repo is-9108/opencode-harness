@@ -54,7 +54,9 @@ export async function runTestFix(deps: StepDeps, run: RunState): Promise<StepRes
   const checksRecord = join(runDir(worktree), "checks", `run-${run.checksRuns ?? 1}.md`)
 
   if (!isDone(record)) {
-    const common = { runId: run.id, directory: worktree, title: `${run.id}: test-fix ${k}`, agent: "test-fixer", model, permission: fixerPermissions(worktree, deps, k) }
+    // テストの変更申請（#36）も書ける
+    const permission = fixerPermissions(worktree, deps, `*test-fix?${k}.md`, "*change-requests?test-*.md")
+    const common = { runId: run.id, directory: worktree, title: `${run.id}: test-fix ${k}`, agent: "test-fixer", model, permission }
     const resuming = run.sessions?.[key]
     const save = (sessionID: string) => {
       const latest = deps.store.get(run.id) ?? run
@@ -94,11 +96,14 @@ export async function runTestFix(deps: StepDeps, run: RunState): Promise<StepRes
 }
 
 // 記録が完成しているか: status: done と、原因・修正の見出しに中身がある
-function isDone(record: string): boolean {
+const isDone = (record: string) => isRecordDone(record, ["原因", "修正"])
+
+// 修正の記録が完成しているか: status: done と、指定した見出しのすべてに中身がある（review-fix と共通）
+export function isRecordDone(record: string, sections: string[]): boolean {
   if (!existsSync(record)) return false
   const text = readFileSync(record, "utf8")
   const section = (title: string) => text.match(new RegExp(`^##\\s*${title}\\s*\\n([\\s\\S]*?)(?=^##\\s|(?![\\s\\S]))`, "m"))?.[1]?.trim()
-  return readFrontmatter(text).status === "done" && Boolean(section("原因")) && Boolean(section("修正"))
+  return readFrontmatter(text).status === "done" && sections.every((t) => Boolean(section(t)))
 }
 
 // これまでの test-fix の記録（エスカレーションの報告の「試した修正」に載せる）
@@ -118,16 +123,15 @@ function fixHistory(worktree: string): string[] {
   return fixAttempts(worktree).map((_, i) => `test-fix ${i + 1} 回目`)
 }
 
-// test-fixer の権限: implementer と同じく、テストファイルと成果物は編集できない。自分の記録ファイルだけは書ける
-function fixerPermissions(worktree: string, deps: StepDeps, k: number): PermissionRule[] {
+// 修正役（test-fixer / review-fixer）の権限: implementer と同じく、テストファイルと成果物は編集できない。
+// 自分の記録ファイル（ownRecords のパターン）だけは書ける
+export function fixerPermissions(worktree: string, deps: StepDeps, ...ownRecords: string[]): PermissionRule[] {
   const prefixes = [...new Set(deps.config.checks.map((c) => c.command.trim().split(/\s+/).slice(0, 2).join(" ")))]
   return [
     ...baseChildPermissions(worktree),
     { permission: "edit", pattern: "*", action: "allow" },
     { permission: "edit", pattern: "*.harness*", action: "deny" },
-    { permission: "edit", pattern: `*test-fix?${k}.md`, action: "allow" },
-    // テストの変更申請（#36）
-    { permission: "edit", pattern: "*change-requests?test-*.md", action: "allow" },
+    ...ownRecords.map((pattern) => ({ permission: "edit", pattern, action: "allow" as const })),
     ...lockPermissions(deps.config.tests.globs),
     ...prefixes.map((p) => ({ permission: "bash", pattern: `${p}*`, action: "allow" as const })),
   ]

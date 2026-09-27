@@ -1,13 +1,15 @@
 // review の工程（計画 8.4）。M1 では spec の観点だけを、judge なしで実行する。
-// レビュアーの出力を機械的に読み取り、根拠（AC の ID と「ファイル:行」）のそろった spec_violation だけを blocking として数える
+// レビュアーの出力を機械的に読み取り、根拠（AC の ID と「ファイル:行」）のそろった spec_violation だけを blocking として数える。
+// blocking があれば review-fix のループに入る（#37）。上限・autoFixBudget・再発（oscillation）・human モードではエスカレーションする
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { readFrontmatter } from "../artifacts.ts"
 import type { StepDeps, StepResult } from "../machine/dev.ts"
 import type { RunState } from "../state.ts"
 import { baseBranchOf, baseChildPermissions, editOnly, readTemplate, runDir } from "./common.ts"
-import { escalate } from "./escalation.ts"
+import { escalate, type Escalation } from "./escalation.ts"
 import { planPath } from "./plan.ts"
+import { reviewFixAttempts } from "./review-fix.ts"
 
 const PERSPECTIVE = "spec"
 const CATEGORIES = ["spec_violation", "spec_gap", "test_gaming", "safety_critical", "other"] as const
@@ -16,7 +18,8 @@ const BLOCKING_CATEGORIES = new Set(["spec_violation"])
 const EVIDENCE = /[\w./\\-]+:\d+/
 const AC_ID = /\bAC-\d+\b/
 
-export type Finding = { id: string; category: string; blocking: boolean; ac: string; evidence: string; content: string }
+// id はレビュアーが振る周ごとの連番（F-01）。key は周をまたいで同じ指摘を見分ける ID（観点 + AC の ID + ファイル。judge は M3）
+export type Finding = { id: string; key: string; category: string; blocking: boolean; ac: string; evidence: string; content: string }
 export type ParsedReview = {
   problems: string[]
   blocking: Finding[]
@@ -24,7 +27,7 @@ export type ParsedReview = {
   nonBlocking: Finding[]
 }
 
-export function parseReview(content: string): ParsedReview {
+export function parseReview(content: string, perspective = PERSPECTIVE): ParsedReview {
   const result: ParsedReview = { problems: [], blocking: [], downgraded: [], nonBlocking: [] }
   if (readFrontmatter(content).status !== "done") result.problems.push("frontmatter が status: done になっていません")
   if (!/^\|\s*ID\s*\|\s*分類\s*\|/m.test(content)) result.problems.push("指摘の表（| ID | 分類 | blocking | AC | 根拠（ファイル:行） | 内容 |）がありません")
@@ -33,7 +36,9 @@ export function parseReview(content: string): ParsedReview {
     const cells = line.split("|").map((c) => c.trim())
     const id = cells[1]
     if (!id || !/^F-\d+$/.test(id)) continue
-    const f: Finding = { id, category: cells[2] ?? "", blocking: cells[3] === "yes", ac: cells[4] ?? "", evidence: cells[5] ?? "", content: cells[6] ?? "" }
+    const ac = cells[4] ?? ""
+    const evidence = cells[5] ?? ""
+    const f: Finding = { id, key: findingKey(perspective, ac, evidence), category: cells[2] ?? "", blocking: cells[3] === "yes", ac, evidence, content: cells[6] ?? "" }
     if (!(CATEGORIES as readonly string[]).includes(f.category)) result.problems.push(`${id} の分類「${f.category}」は決まりにありません（${CATEGORIES.join(" / ")}）`)
     if (cells[3] !== "yes" && cells[3] !== "no") result.problems.push(`${id} の blocking は yes か no で書いてください（「${cells[3]}」）`)
     if (!f.blocking) result.nonBlocking.push(f)
@@ -45,6 +50,15 @@ export function parseReview(content: string): ParsedReview {
   return result
 }
 
+// 指摘の ID（簡易版）: 観点 + 最初の AC の ID + 根拠のファイル（行番号は、修正で行がずれても同じ指摘とみなすため除く）
+export function findingKey(perspective: string, ac: string, evidence: string): string {
+  const file = evidence.match(EVIDENCE)?.[0]?.replace(/:\d+$/, "").replace(/\\/g, "/").replace(/^\.\//, "") ?? "-"
+  return `${perspective}:${ac.match(AC_ID)?.[0] ?? "-"}:${file}`
+}
+
+const roundDir = (worktree: string, round: number) => join(runDir(worktree), "reviews", `round-${round}`)
+const summaryPathOf = (worktree: string, round: number) => join(roundDir(worktree, round), "summary.md")
+
 export async function runReview(deps: StepDeps, run: RunState): Promise<StepResult> {
   const worktree = run.worktree
   if (!worktree) return { kind: "error", message: "worktree が記録されていません。setup からやり直してください" }
@@ -54,15 +68,20 @@ export async function runReview(deps: StepDeps, run: RunState): Promise<StepResu
   if (!model) return { kind: "error", message: `harness.config.json の models に「${modelKey}」がありません（spec の観点のレビューに使う）` }
 
   const round = (run.reviewRounds ?? 0) + 1
-  const dir = join(runDir(worktree), "reviews", `round-${round}`)
+  const dir = roundDir(worktree, round)
   mkdirSync(dir, { recursive: true })
   const output = join(dir, `${PERSPECTIVE}.md`)
 
-  // レビューの入力: ベースからの差分（ハーネス自身の .opencode/ は除く）
+  // レビューの入力: ベースからの差分（ハーネス自身の .opencode/ は除く）。
+  // 2 周目以降は、前回レビューした commit からの差分と、前回の blocking 指摘だけを見させる（計画 8.4）
+  const previous = round > 1 && run.reviewedCommit ? { commit: run.reviewedCommit, summary: summaryPathOf(worktree, round - 1) } : undefined
   const diffPath = join(dir, "input.diff")
-  const diff = await deps.exec("git", ["diff", `${baseBranchOf(deps.config, run)}...HEAD`, "--", ".", ":(exclude).opencode"], { cwd: worktree })
+  const range = previous ? `${previous.commit}..HEAD` : `${baseBranchOf(deps.config, run)}...HEAD`
+  const diff = await deps.exec("git", ["diff", range, "--", ".", ":(exclude).opencode"], { cwd: worktree })
   if (diff.code !== 0) return { kind: "error", message: `差分を取得できませんでした: ${diff.stderr.trim()}` }
   writeFileSync(diffPath, diff.stdout)
+  const head = await deps.exec("git", ["rev-parse", "HEAD"], { cwd: worktree })
+  if (head.code !== 0) return { kind: "error", message: `HEAD の commit を取得できませんでした: ${head.stderr.trim()}` }
 
   const common = {
     runId: run.id,
@@ -72,7 +91,7 @@ export async function runReview(deps: StepDeps, run: RunState): Promise<StepResu
     model,
     permission: [...baseChildPermissions(worktree), ...editOnly(`${PERSPECTIVE}.md`)],
   }
-  const first = await deps.child({ ...common, prompt: reviewPrompt(worktree, diffPath, output) })
+  const first = await deps.child({ ...common, prompt: reviewPrompt(worktree, diffPath, output, previous?.summary) })
   if (first.status !== "completed") return childFailed(first)
   deps.store.save({ ...run, sessions: { ...run.sessions, [`review-${round}-${PERSPECTIVE}`]: first.sessionID } })
 
@@ -86,28 +105,59 @@ export async function runReview(deps: StepDeps, run: RunState): Promise<StepResu
       return { kind: "error", message: [`レビューの出力が不完全です（${output}）:`, ...parsed.problems.map((p) => `- ${p}`)].join("\n") }
   }
 
-  const summaryPath = join(dir, "summary.md")
+  const summaryPath = summaryPathOf(worktree, round)
   writeFileSync(summaryPath, renderSummary(round, parsed))
   const latest = deps.store.get(run.id) ?? run
   deps.store.appendEvent(run.id, { type: "review.completed", round, blocking: parsed.blocking.length, downgraded: parsed.downgraded.length, nonBlocking: parsed.nonBlocking.length })
 
+  // 一度解消した指摘（前の周に出て、直前の周には出なかった指摘）が再び出たら、揺り戻し
+  const history = latest.findingRounds ?? {}
+  const recurred = parsed.blocking.filter((f) => history[f.key]?.length && !history[f.key]!.includes(round - 1))
+  const findingRounds = { ...history }
+  for (const f of parsed.blocking) findingRounds[f.key] = [...new Set([...(findingRounds[f.key] ?? []), round])]
+  const reviewed = { ...latest, reviewRounds: round, reviewedCommit: head.stdout.trim(), findingRounds }
+
   if (parsed.blocking.length === 0) {
-    deps.store.save({ ...latest, reviewRounds: round, step: "pr" })
+    deps.store.save({ ...reviewed, step: "pr" })
     return { kind: "continue", message: `review が完了しました（blocking 0 件、参考 ${parsed.nonBlocking.length} 件）。記録: ${summaryPath}。次の工程: pr` }
   }
-  // 修正のループ（review-fix）は #37 で入れる。それまでは、blocking があればエスカレーションする（上限 0 回のループとして扱う）
-  const reviewed = { ...latest, reviewRounds: round }
   deps.store.save(reviewed)
-  const escalated = await escalate(deps, reviewed, {
-    reason: "loop_exhausted",
-    summary: `review で blocking の指摘が ${parsed.blocking.length} 件ありました。`,
-    history: [`review ${round} 周目: 記録 ${summaryPath}`],
-    open: parsed.blocking.map((f) => describe(f).replace(/^- /, "")),
-  })
-  return { ...escalated, message: [escalated.message, ...parsed.blocking.map(describe)].join("\n") }
+  return afterReviewBlocking(deps, reviewed, parsed.blocking, recurred, summaryPath)
 }
 
-const describe = (f: Finding) => `- ${f.id}（${f.category}、${f.ac}、${f.evidence}）: ${f.content}`
+// blocking の指摘があったときに、review-fix に進むか、エスカレーションするかを決める
+async function afterReviewBlocking(deps: StepDeps, run: RunState, blocking: Finding[], recurred: Finding[], summaryPath: string): Promise<StepResult> {
+  const loops = deps.config.loops
+  const reviewFix = run.reviewFix ?? 0
+  const used = run.autoFixUsed ?? 0
+  const worktree = run.worktree ?? ""
+  const rounds = run.reviewRounds ?? 1
+  const base = {
+    history: Array.from({ length: rounds }, (_, i) => `review ${i + 1} 周目: 記録 ${summaryPathOf(worktree, i + 1)}`),
+    attempts: reviewFixAttempts(worktree),
+    open: blocking.map((f) => describe(f).replace(/^- /, "")),
+  }
+  const stop = async (e: Escalation) => {
+    const escalated = await escalate(deps, run, e)
+    return { ...escalated, message: [escalated.message, ...blocking.map(describe)].join("\n") }
+  }
+
+  if (recurred.length > 0)
+    return stop({ ...base, reason: "oscillation", summary: `一度解消した blocking の指摘が、review ${rounds} 周目で再び出ました（${recurred.map((f) => f.key).join("、")}）。` })
+  if (run.mode === "human")
+    return stop({ ...base, reason: "loop_exhausted", summary: `review で blocking の指摘が ${blocking.length} 件ありました。human モードのため、review-fix は自動で実行しません。` })
+  if (reviewFix >= loops.reviewFix)
+    return stop({ ...base, reason: "loop_exhausted", summary: `review-fix を ${reviewFix} 回（上限 loops.reviewFix）繰り返しても、blocking の指摘が ${blocking.length} 件残っています。` })
+  if (used >= loops.autoFixBudget)
+    return stop({ ...base, reason: "loop_exhausted", summary: `自動の修正（test-fix と review-fix の合計）が上限 autoFixBudget（${loops.autoFixBudget} 回）に達しました。blocking の指摘が ${blocking.length} 件残っています。` })
+
+  // 回数は工程に入る前に加算して保存する（強制終了で二重に数えない）
+  deps.store.save({ ...run, step: "review-fix", reviewFix: reviewFix + 1, autoFixUsed: used + 1 })
+  deps.store.appendEvent(run.id, { type: "review-fix.started", k: reviewFix + 1, findings: blocking.map((f) => f.key) })
+  return { kind: "continue", message: [`review で blocking の指摘が ${blocking.length} 件ありました（記録: ${summaryPath}）。review-fix の ${reviewFix + 1} 回目に進みます`, ...blocking.map(describe)].join("\n") }
+}
+
+const describe = (f: Finding) => `- ${f.id}（${f.category}、${f.ac}、${f.evidence}、ID: ${f.key}）: ${f.content}`
 
 function renderSummary(round: number, parsed: ParsedReview): string {
   return [
@@ -130,11 +180,20 @@ function renderSummary(round: number, parsed: ParsedReview): string {
   ].join("\n")
 }
 
-function reviewPrompt(worktree: string, diffPath: string, output: string): string {
+function reviewPrompt(worktree: string, diffPath: string, output: string, previousSummary?: string): string {
   return [
     `次の実装の差分を、「${PERSPECTIVE}」の観点からレビューしてください。`,
+    ...(previousSummary
+      ? [
+          "",
+          "これは 2 周目以降のレビューです。見るのは次の 2 つだけにしてください。",
+          `1. 前回の blocking の指摘（${previousSummary} の「blocking」の欄）が解消したか。解消していなければ、同じ AC の ID と根拠のファイルで、もう一度 blocking として書く`,
+          "2. 前回のレビューからの差分（下の「差分」）が、新しく仕様違反を持ち込んでいないか",
+          "前回の差分にあった、ほかの箇所は見直さない。",
+        ]
+      : []),
     "",
-    `- 差分: ${diffPath}`,
+    `- 差分: ${diffPath}${previousSummary ? "（前回のレビューからの差分）" : ""}`,
     `- issue: ${join(runDir(worktree), "00-issue.md")}`,
     `- 計画: ${planPath(worktree)}`,
     "- 必要に応じて、差分に出てくるファイルの全体を読んでよい",

@@ -70,7 +70,7 @@ function render(number: number, run: RunState, e: Escalation, diff: string, at: 
     "## 止まるまでの経緯",
     "",
     ...list(e.history),
-    `- 実行した回数: checks ${run.checksRuns ?? 0} 回、review ${run.reviewRounds ?? 0} 回、計画の修正指示 ${run.feedbackCount ?? 0} 回`,
+    `- 実行した回数: checks ${run.checksRuns ?? 0} 回、test-fix ${run.testFix ?? 0} 回、review ${run.reviewRounds ?? 0} 回、review-fix ${run.reviewFix ?? 0} 回、計画の修正指示 ${run.feedbackCount ?? 0} 回`,
     "",
     "## 試した修正",
     "",
