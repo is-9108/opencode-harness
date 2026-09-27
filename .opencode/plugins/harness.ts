@@ -8,6 +8,7 @@ import { createStore, startRun } from "../harness/state.ts"
 import { createEventBus, runChild, type PermissionRule } from "../harness/session.ts"
 import { createSessionApi } from "../harness/sdk-adapter.ts"
 import { advance, record, type RecordInput, type StepDeps } from "../harness/machine/dev.ts"
+import { waive } from "../harness/steps/waiver.ts"
 import { realExec, realShell } from "../harness/exec.ts"
 import { filterGrepOutput, guardHarnessTool } from "../harness/permissions.ts"
 
@@ -100,6 +101,23 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
         const deps = stepDeps(context)
         if (typeof deps === "string") return deps
         const result = record(deps, args as RecordInput)
+        return `結果: ${result.kind}\n${result.message}`
+      },
+    }),
+    harness_waive: tool({
+      description:
+        "レビューの指摘を免除リストに追加する。ユーザーがはっきり免除を指示したときだけ使う（自分の判断で免除しない）。免除した指摘は、次のレビューから blocking に数えず、PR 本文に理由とともに載る。",
+      args: {
+        run: tool.schema.string().describe("run の ID（例: issue-12）"),
+        finding: tool.schema.string().describe("指摘の ID（例: spec:AC-2:src/slug.ts）、または最新のレビューの番号（例: F-01）"),
+        reason: tool.schema.string().describe("免除の理由（ユーザーから聞いたもの。必須）"),
+      },
+      async execute(args, context) {
+        const denied = guardHarnessTool(context.agent)
+        if (denied) return denied
+        const deps = stepDeps(context)
+        if (typeof deps === "string") return deps
+        const result = waive(deps, args)
         return `結果: ${result.kind}\n${result.message}`
       },
     }),
