@@ -3,7 +3,7 @@ import type { HarnessConfig } from "../config.ts"
 import type { Exec, Shell } from "../exec.ts"
 import type { ChildResult, RunChildOptions } from "../session.ts"
 import type { RunState, Store } from "../state.ts"
-import { runSetup } from "../steps/setup.ts"
+import { recordDependency, runSetup } from "../steps/setup.ts"
 import { recordPlan, runPlan, waitApproval } from "../steps/plan.ts"
 import { runRed } from "../steps/red.ts"
 import { runGreen } from "../steps/green.ts"
@@ -28,7 +28,15 @@ export type StepDeps = {
 // escalated: 人に引き渡す / done: 完了 / error: 進められない（理由を message に書く）
 export type StepResult = { kind: "continue" | "need_user" | "escalated" | "done" | "error"; message: string }
 
-export type RecordInput = { run: string; gate: "plan"; decision: "approved" | "changes_requested" | "aborted"; feedback?: string }
+export type RecordInput =
+  | { run: string; gate: "plan"; decision: "approved" | "changes_requested" | "aborted"; feedback?: string }
+  | { run: string; gate: "dependency"; decision: "wait" | "stack" | "ignore" }
+
+// ゲートごとに記録できる判断
+const DECISIONS: Record<RecordInput["gate"], readonly string[]> = {
+  plan: ["approved", "changes_requested", "aborted"],
+  dependency: ["wait", "stack", "ignore"],
+}
 
 export async function advance(deps: StepDeps, runId: string): Promise<StepResult> {
   const run = deps.store.get(runId)
@@ -70,8 +78,12 @@ async function runStep(deps: StepDeps, run: RunState): Promise<StepResult> {
 export function record(deps: StepDeps, input: RecordInput): StepResult {
   const run = deps.store.get(input.run)
   if (!run) return { kind: "error", message: `run ${input.run} がありません` }
+  if (!DECISIONS[input.gate]?.includes(input.decision))
+    return { kind: "error", message: `ゲート ${input.gate} には、判断 ${input.decision} を記録できません（記録できるもの: ${DECISIONS[input.gate]?.join(" / ") ?? "なし"}）` }
   switch (input.gate) {
     case "plan":
       return recordPlan(deps, run, input)
+    case "dependency":
+      return recordDependency(deps, run, input)
   }
 }

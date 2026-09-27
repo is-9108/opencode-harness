@@ -7,7 +7,7 @@ import { formatStatus } from "../harness/status.ts"
 import { createStore, startRun } from "../harness/state.ts"
 import { createEventBus, runChild, type PermissionRule } from "../harness/session.ts"
 import { createSessionApi } from "../harness/sdk-adapter.ts"
-import { advance, record, type StepDeps } from "../harness/machine/dev.ts"
+import { advance, record, type RecordInput, type StepDeps } from "../harness/machine/dev.ts"
 import { realExec, realShell } from "../harness/exec.ts"
 import { filterGrepOutput, guardHarnessTool } from "../harness/permissions.ts"
 
@@ -85,11 +85,13 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
     }),
     harness_record: tool({
       description:
-        "ユーザーの判断を記録する。harness_advance が need_user で承認を求めたとき、question ツールで聞いた結果をそのまま渡す。修正指示のときは、ユーザーの指示の内容を feedback に入れる。",
+        "ユーザーの判断を記録する。harness_advance が need_user で判断を求めたとき、question ツールで聞いた結果をそのまま渡す。計画の承認（gate: plan）は approved / changes_requested / aborted、依存先の確認（gate: dependency）は wait / stack / ignore。修正指示のときは、ユーザーの指示の内容を feedback に入れる。",
       args: {
         run: tool.schema.string().describe("run の ID（例: issue-12）"),
-        gate: tool.schema.enum(["plan"]).describe("どの承認か"),
-        decision: tool.schema.enum(["approved", "changes_requested", "aborted"]).describe("承認 / 修正指示 / 中断"),
+        gate: tool.schema.enum(["plan", "dependency"]).describe("どの判断か（plan: 計画の承認、dependency: 依存先の issue の確認）"),
+        decision: tool.schema
+          .enum(["approved", "changes_requested", "aborted", "wait", "stack", "ignore"])
+          .describe("plan: 承認 / 修正指示 / 中断。dependency: 待つ / 依存先のブランチの上に積む / 無視して進める"),
         feedback: tool.schema.string().optional().describe("修正指示の内容（changes_requested のときは必須）"),
       },
       async execute(args, context) {
@@ -97,7 +99,7 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
         if (denied) return denied
         const deps = stepDeps(context)
         if (typeof deps === "string") return deps
-        const result = record(deps, args)
+        const result = record(deps, args as RecordInput)
         return `結果: ${result.kind}\n${result.message}`
       },
     }),

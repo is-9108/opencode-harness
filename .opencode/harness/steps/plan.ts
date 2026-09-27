@@ -78,7 +78,7 @@ export function waitApproval(run: RunState): StepResult {
   return approvalRequest(run, path, parsePlan(readIfExists(path)).testCases)
 }
 
-export function recordPlan(deps: StepDeps, run: RunState, input: RecordInput): StepResult {
+export function recordPlan(deps: StepDeps, run: RunState, input: Extract<RecordInput, { gate: "plan" }>): StepResult {
   if (run.step !== "approval") return { kind: "error", message: `${run.id} は計画の承認待ちではありません（現在の工程: ${run.step}）` }
   const worktree = run.worktree ?? ""
   const gates = gatesDir(worktree)

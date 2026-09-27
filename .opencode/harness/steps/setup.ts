@@ -2,8 +2,9 @@
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs"
 import { basename, join, resolve } from "node:path"
-import type { StepDeps, StepResult } from "../machine/dev.ts"
-import type { RunState } from "../state.ts"
+import type { RecordInput, StepDeps, StepResult } from "../machine/dev.ts"
+import { runIdFor, type RunState } from "../state.ts"
+import { baseBranchOf } from "./common.ts"
 
 const SLUG_MAX = 40
 
@@ -28,14 +29,18 @@ export async function runSetup(deps: StepDeps, run: RunState): Promise<StepResul
   const issue = JSON.parse(view.stdout) as GhIssue
   if (issue.state !== "OPEN") return { kind: "error", message: `issue #${run.issue} は閉じています（${issue.state}）。開いている issue だけを開発できます` }
 
-  // 2. worktree とブランチ
+  // 2. 依存先の issue の確認（worktree を作る前に。積むかどうかで起点が変わるため）
+  const blocked = await checkDependencies(deps, run, issue.body)
+  if (blocked) return blocked
+
+  // 3. worktree とブランチ
   const branch = config.git.branch.replace("{issue}", String(run.issue)).replace("{slug}", slugify(issue.title))
   const worktreeRoot = resolve(root, config.git.worktreeRoot.replace("{repo}", basename(root)))
   const worktree = join(worktreeRoot, `issue-${run.issue}`)
-  const ensured = await ensureWorktree(deps, worktree, branch)
+  const ensured = await ensureWorktree(deps, worktree, branch, baseBranchOf(config, run))
   if (ensured) return ensured
 
-  // 3. 依存のインストール（node_modules などは git の管理外なので、worktree には入っていない）
+  // 4. 依存のインストール（node_modules などは git の管理外なので、worktree には入っていない）
   if (config.setup.install) {
     const install = await deps.shell(config.setup.install, { cwd: worktree, timeoutSec: config.setup.timeoutSec })
     if (install.code !== 0 || install.timedOut) {
@@ -45,20 +50,20 @@ export async function runSetup(deps: StepDeps, run: RunState): Promise<StepResul
     }
   }
 
-  // 4. issue のスナップショット。成果物のディレクトリは、それ自体の .gitignore で git の管理から外す
+  // 5. issue のスナップショット。成果物のディレクトリは、それ自体の .gitignore で git の管理から外す
   const runDir = join(worktree, ".harness", "run")
   mkdirSync(runDir, { recursive: true })
   writeFileSync(join(worktree, ".harness", ".gitignore"), "*\n")
   writeFileSync(join(runDir, "00-issue.md"), renderSnapshot(issue, deps.now?.() ?? new Date()))
 
-  store.save({ ...run, step: "plan", title: issue.title, worktree, branch })
+  store.save({ ...run, step: "plan", title: issue.title, worktree, branch, pendingDependencies: undefined, stackCandidate: undefined })
   store.appendEvent(run.id, { type: "step.completed", step: "setup", worktree, branch })
   return { kind: "continue", message: `setup が完了しました。worktree: ${worktree}（ブランチ: ${branch}）。次の工程: plan` }
 }
 
 // 既存の worktree は再利用し、ブランチだけが残っていればそのブランチで作る。問題があれば StepResult を返す
-async function ensureWorktree(deps: StepDeps, worktree: string, branch: string): Promise<StepResult | undefined> {
-  const { root, config, exec } = deps
+async function ensureWorktree(deps: StepDeps, worktree: string, branch: string, base: string): Promise<StepResult | undefined> {
+  const { root, exec } = deps
   const git = (...args: string[]) => exec("git", args, { cwd: root })
 
   const listed = parseWorktreeList((await git("worktree", "list", "--porcelain")).stdout).find((w) => samePath(w.path, worktree))
@@ -72,7 +77,7 @@ async function ensureWorktree(deps: StepDeps, worktree: string, branch: string):
   const branchExists = (await git("rev-parse", "--verify", "--quiet", `refs/heads/${branch}`)).code === 0
   const add = branchExists
     ? await git("worktree", "add", worktree, branch)
-    : await git("worktree", "add", "-b", branch, worktree, config.git.baseBranch)
+    : await git("worktree", "add", "-b", branch, worktree, base)
   if (add.code !== 0) return { kind: "error", message: `worktree を作れませんでした: ${add.stderr.trim()}` }
   return undefined
 }
@@ -113,4 +118,90 @@ function renderSnapshot(issue: GhIssue, fetchedAt: Date): string {
     issue.body,
     "",
   ].join("\n")
+}
+
+
+// ---- 依存先の issue の確認（計画 8.2 setup ①、#31） ----
+
+// issue 本文の「依存関係」のセクションから、依存先の issue 番号を取り出す（自分自身は除く）
+export function parseDependencies(body: string, self: number): number[] {
+  const section = body.replace(/\r\n/g, "\n").match(/^##\s*依存関係\s*\n([\s\S]*?)(?=^##\s|(?![\s\S]))/m)?.[1] ?? ""
+  const numbers = [...section.matchAll(/#(\d+)\b/g)].map((m) => Number(m[1]))
+  return [...new Set(numbers)].filter((n) => n !== self)
+}
+
+type GhDependency = { number: number; title: string; state: string }
+
+// 依存先に開いている issue があり、ユーザーがまだ判断していなければ need_user を返す
+async function checkDependencies(deps: StepDeps, run: RunState, body: string): Promise<StepResult | undefined> {
+  if (run.dependencyDecision) return undefined
+  const numbers = parseDependencies(body, run.issue)
+  const open: GhDependency[] = []
+  for (const n of numbers) {
+    const view = await deps.exec("gh", ["issue", "view", String(n), "--json", "number,title,state"], { cwd: deps.root })
+    if (view.code !== 0) return { kind: "error", message: `依存先の issue #${n} を取得できませんでした: ${view.stderr.trim()}` }
+    const dep = JSON.parse(view.stdout) as GhDependency
+    if (dep.state === "OPEN") open.push(dep)
+  }
+  if (!open.length) return undefined
+
+  // 積めるのは、開いている依存先が 1 つで、そのブランチが見つかるときだけ
+  const candidate = open.length === 1 ? await findDependencyBranch(deps, open[0]!.number) : undefined
+  deps.store.save({ ...run, pendingDependencies: open.map((d) => d.number), stackCandidate: candidate })
+  deps.store.appendEvent(run.id, { type: "dependency.open", open: open.map((d) => d.number), candidate })
+
+  const list = open.map((d) => `- #${d.number} ${d.title}`).join("\n")
+  const options = [
+    "「待つ」: 依存先が閉じるまで止める（decision: wait）",
+    ...(candidate ? [`「#${open[0]!.number} のブランチ ${candidate} の上に積む」: 依存先の変更を含めて開発する。PR の base も ${candidate} になる（decision: stack）`] : []),
+    "「無視して進める」: ベースブランチから開発する（decision: ignore）",
+  ]
+  return {
+    kind: "need_user",
+    message: [
+      `issue #${run.issue} の依存先に、まだ開いている issue があります。`,
+      list,
+      "",
+      "手順: question ツールで、次の選択肢からユーザーに選んでもらい、harness_record（gate: dependency）で記録してください。",
+      ...options.map((o) => `- ${o}`),
+      ...(open.length === 1 && !candidate ? ["", `（#${open[0]!.number} のブランチが見つからないため、依存先のブランチの上で開発する選択肢はありません）`] : []),
+    ].join("\n"),
+  }
+}
+
+// 依存先の issue のブランチを探す。同じリポジトリの run のブランチ、なければ「Closes #N」がある開いた PR の head
+async function findDependencyBranch(deps: StepDeps, issue: number): Promise<string | undefined> {
+  const git = (...args: string[]) => deps.exec("git", args, { cwd: deps.root })
+  const exists = async (branch: string) => (await git("rev-parse", "--verify", "--quiet", `refs/heads/${branch}`)).code === 0
+
+  const fromRun = deps.store.get(runIdFor({ kind: "dev", issue }))?.branch
+  if (fromRun && (await exists(fromRun))) return fromRun
+
+  const list = await deps.exec("gh", ["pr", "list", "--state", "open", "--json", "number,headRefName,body", "--limit", "100"], { cwd: deps.root })
+  if (list.code !== 0) return undefined
+  const closes = new RegExp(`\\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\\s+#${issue}\\b`, "i")
+  const pr = (JSON.parse(list.stdout) as { headRefName: string; body: string }[]).find((p) => closes.test(p.body))
+  return pr && (await exists(pr.headRefName)) ? pr.headRefName : undefined
+}
+
+// 依存先の確認への回答を記録する
+export function recordDependency(deps: StepDeps, run: RunState, input: Extract<RecordInput, { gate: "dependency" }>): StepResult {
+  if (run.step !== "setup" || !run.pendingDependencies?.length)
+    return { kind: "error", message: `${run.id} は依存先の確認を待っていません（現在の工程: ${run.step}）` }
+  const pending = run.pendingDependencies.map((n) => `#${n}`).join("、")
+  deps.store.appendEvent(run.id, { type: "gate.recorded", gate: "dependency", decision: input.decision })
+
+  switch (input.decision) {
+    case "wait":
+      // 判断は保存しない。次に /dev を実行したときに、もう一度依存先を確かめる
+      deps.store.save({ ...run, pendingDependencies: undefined, stackCandidate: undefined })
+      return { kind: "done", message: `依存先（${pending}）が閉じるまで待ちます。閉じたら、もう一度 /dev ${run.issue} を実行してください` }
+    case "stack":
+      if (!run.stackCandidate) return { kind: "error", message: `積む先のブランチが見つかりません。「待つ」か「無視して進める」を選んでください` }
+      deps.store.save({ ...run, dependencyDecision: "stack", baseBranch: run.stackCandidate })
+      return { kind: "continue", message: `${run.stackCandidate} の上に積んで開発します。harness_advance で setup を続けてください` }
+    case "ignore":
+      deps.store.save({ ...run, dependencyDecision: "ignore" })
+      return { kind: "continue", message: `依存先（${pending}）を無視して、ベースブランチから開発します。harness_advance で setup を続けてください` }
+  }
 }

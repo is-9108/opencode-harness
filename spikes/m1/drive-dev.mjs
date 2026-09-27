@@ -31,6 +31,9 @@ while (Date.now() - started < Number(process.env.TIMEOUT_MIN ?? 40) * 60_000) {
     const answers = req.questions.map((q) => {
       const labels = (q.options ?? []).map((o) => o.label)
       log("QUESTION:", q.question.replace(/\s+/g, " ").slice(0, 200), "| options:", labels.join(" / "))
+      // 依存先の確認（#31）: DEP_ANSWER（待つ / 積む / 無視）を含む選択肢を選ぶ
+      const dep = labels.find((l) => process.env.DEP_ANSWER && l.includes(process.env.DEP_ANSWER))
+      if (dep) return [dep]
       // 選択肢に「承認」があれば判断の問い、なければ修正内容を聞く問いとみなす（問いの文面に「具体的」などが入ることがあるため）
       const asksDetail = labels.length === 0 || !labels.some((l) => /承認/.test(l))
       if (asksDetail) return [FEEDBACK]

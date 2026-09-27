@@ -18,6 +18,12 @@ export type RunState = {
   title?: string
   worktree?: string
   branch?: string
+  // 依存先の issue の確認（#31）。開いている依存先と、積む先の候補のブランチ、ユーザーの判断
+  pendingDependencies?: number[]
+  stackCandidate?: string
+  dependencyDecision?: "stack" | "ignore"
+  // 依存先の issue のブランチに積んだときの基準のブランチ。なければ設定の git.baseBranch（差分と PR の base に使う）
+  baseBranch?: string
   // 工程ごとの子セッションの ID（修正指示や再開のときに、同じセッションへ続きを送るため）
   sessions?: Record<string, string>
   // ユーザーの修正指示のうち、まだ子セッションに送っていないもの
