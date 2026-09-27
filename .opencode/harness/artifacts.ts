@@ -8,10 +8,18 @@ export function readFrontmatter(content: string): Record<string, string> {
   if (!block) return {}
   const data: Record<string, string> = {}
   for (const line of block.split(/\r?\n/)) {
-    const m = line.match(/^([A-Za-z0-9_]+):\s*(.*?)\s*(#.*)?$/)
-    if (m?.[1]) data[m[1]] = m[2] ?? ""
+    const m = line.match(/^([A-Za-z0-9_]+):\s*(.*)$/)
+    if (m?.[1]) data[m[1]] = stripComment(m[2] ?? "")
   }
   return data
+}
+
+// YAML と同じく、引用符の外で、空白の後に続く # 以降をコメントとして取り除く
+function stripComment(value: string): string {
+  const quoted = value.match(/^("[^"]*"|'[^']*')/)
+  if (quoted?.[1]) return quoted[1]
+  const i = value.search(/\s#/)
+  return (i < 0 ? value : value.slice(0, i)).trim()
 }
 
 // frontmatter の 1 項目を書き換える。項目がなければ末尾に足し、frontmatter がなければ作る

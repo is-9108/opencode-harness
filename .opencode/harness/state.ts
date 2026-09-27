@@ -31,6 +31,9 @@ export type RunState = {
   checksRuns?: number
   // review を実行した回数（reviews/round-<n>/ の n）
   reviewRounds?: number
+  // pr の工程で作成・更新した PR
+  prNumber?: number
+  prUrl?: string
 }
 
 export type RunList = { runs: RunState[]; broken: { id: string; error: string }[] }

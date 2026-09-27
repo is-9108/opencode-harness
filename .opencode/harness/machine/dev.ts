@@ -9,6 +9,7 @@ import { runRed } from "../steps/red.ts"
 import { runGreen } from "../steps/green.ts"
 import { runChecks } from "../steps/checks.ts"
 import { runReview } from "../steps/review.ts"
+import { runPr } from "../steps/pr.ts"
 import { auditAfterStep } from "../steps/audit.ts"
 
 export type StepDeps = {
@@ -32,6 +33,7 @@ export type RecordInput = { run: string; gate: "plan"; decision: "approved" | "c
 export async function advance(deps: StepDeps, runId: string): Promise<StepResult> {
   const run = deps.store.get(runId)
   if (!run) return { kind: "error", message: `run ${runId} がありません。harness_start で作成してください` }
+  if (run.status === "done") return { kind: "done", message: `${runId} は完了しています${run.prUrl ? `（PR: ${run.prUrl}）` : ""}` }
   if (run.status === "interrupted") return { kind: "error", message: `${runId} は中断されています` }
   if (run.status === "escalated") return { kind: "escalated", message: `${runId} はエスカレーションされています（工程: ${run.step}）。/fix で対応してください` }
   const result = await runStep(deps, run)
@@ -58,6 +60,8 @@ async function runStep(deps: StepDeps, run: RunState): Promise<StepResult> {
       return runChecks(deps, run)
     case "review":
       return runReview(deps, run)
+    case "pr":
+      return runPr(deps, run)
     default:
       return { kind: "error", message: `工程 ${run.step} はまだ実装されていません` }
   }
