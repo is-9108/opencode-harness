@@ -51,3 +51,9 @@ permission:
 - setup で、依存先の issue が開いていると `need_user` になる。メッセージに書かれた選択肢（「待つ」「〜のブランチの上に積む」「無視して進める」）を、そのまま `question` ツールの選択肢にする。メッセージにない選択肢は足さない。
 - 回答は `harness_record(gate: "dependency", decision: "wait" | "stack" | "ignore")` で記録する。
 - 「待つ」を記録すると `done` が返る。依存先が閉じたら、もう一度 `/dev` を実行すればよいことをユーザーに伝えて止まる。
+
+## テストの変更申請があったとき
+
+- 実装役が「テストのほうが仕様と合っていない」と申請すると、`need_user` で申請の中身（対象のテスト、根拠の AC、理由、変更内容）が返る。
+- 申請を短く要約して示し、`question` ツールで「承認（テストを変える）」「却下（実装を直させる）」を聞く。判断に必要なら、申請ファイルや issue を読んでよい。
+- 記録は `harness_record(gate: "test_change", decision: "approved" | "rejected")`。却下なら、理由を聞いて `feedback` に入れる。記録の結果が `continue` なら `harness_advance` を再開する。

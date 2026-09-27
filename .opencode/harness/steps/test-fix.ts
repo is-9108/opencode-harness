@@ -13,6 +13,7 @@ import { baseChildPermissions, runDir } from "./common.ts"
 import { escalate } from "./escalation.ts"
 import { planPath } from "./plan.ts"
 import { checkpoint } from "./red.ts"
+import { changeRequestDir, findPendingRequest, handleChangeRequest } from "./test-change.ts"
 
 const MODEL_KEYS = ["dev.test-fix", "dev.implementer"]
 
@@ -59,7 +60,7 @@ export async function runTestFix(deps: StepDeps, run: RunState): Promise<StepRes
       const latest = deps.store.get(run.id) ?? run
       deps.store.save({ ...latest, sessions: { ...latest.sessions, [key]: sessionID } })
     }
-    const first = await deps.child({ ...common, sessionID: resuming, onSession: save, prompt: resuming ? resumePrompt(record) : initialPrompt(worktree, record, checksRecord, k) })
+    const first = await deps.child({ ...common, sessionID: resuming, onSession: save, prompt: resuming ? resumePrompt(record) : initialPrompt(worktree, record, checksRecord, k, run.rejectedChangeRequest) })
     if (first.status === "aborted") return { kind: "error", message: "test-fix の子セッションが中断されました。harness_advance で、同じ子セッションの続きから再開できます" }
     if (first.status === "error") return { kind: "error", message: `test-fix の子セッションがエラーで終わりました: ${first.error}` }
     // 原因の記録の書き忘れは、同じセッションに 1 回だけ直させる
@@ -70,17 +71,26 @@ export async function runTestFix(deps: StepDeps, run: RunState): Promise<StepRes
     }
   }
 
+  // テストの変更申請があれば、人の判断を待つ。根拠のない申請は、通常の test-fix として続ける（#36）
+  let note = ""
+  const request = findPendingRequest(worktree)
+  if (request) {
+    const handled = await handleChangeRequest(deps, deps.store.get(run.id) ?? run, request)
+    if ("kind" in handled) return handled
+    note = `\n${handled.invalid}`
+  }
+
   // commit の前にテストのロックを照合する。変更されていたら元に戻し、この周は失敗として checks に戻す
   const violated = await enforceLock(deps, run)
   if (violated) {
-    deps.store.save({ ...(deps.store.get(run.id) ?? run), step: "checks" })
+    deps.store.save({ ...(deps.store.get(run.id) ?? run), step: "checks", rejectedChangeRequest: undefined })
     return { kind: "continue", message: `${violated.message}\ntest-fix の ${k} 回目は失敗として扱い、checks に戻ります` }
   }
   const commit = await checkpoint(deps, worktree, `fix: #${run.issue} の checks の失敗を直す（test-fix ${k}）`)
   if (typeof commit !== "string") return commit
-  deps.store.save({ ...(deps.store.get(run.id) ?? run), step: "checks" })
+  deps.store.save({ ...(deps.store.get(run.id) ?? run), step: "checks", rejectedChangeRequest: undefined })
   deps.store.appendEvent(run.id, { type: "step.completed", step: "test-fix", k, commit })
-  return { kind: "continue", message: `test-fix の ${k} 回目が完了しました（記録: ${record}）。commit ${commit.slice(0, 7)}。次の工程: checks` }
+  return { kind: "continue", message: `test-fix の ${k} 回目が完了しました（記録: ${record}）。commit ${commit.slice(0, 7)}。次の工程: checks${note}` }
 }
 
 // 記録が完成しているか: status: done と、原因・修正の見出しに中身がある
@@ -116,29 +126,46 @@ function fixerPermissions(worktree: string, deps: StepDeps, k: number): Permissi
     { permission: "edit", pattern: "*", action: "allow" },
     { permission: "edit", pattern: "*.harness*", action: "deny" },
     { permission: "edit", pattern: `*test-fix?${k}.md`, action: "allow" },
+    // テストの変更申請（#36）
+    { permission: "edit", pattern: "*change-requests?test-*.md", action: "allow" },
     ...lockPermissions(deps.config.tests.globs),
     ...prefixes.map((p) => ({ permission: "bash", pattern: `${p}*`, action: "allow" as const })),
   ]
 }
 
-function initialPrompt(worktree: string, record: string, checksRecord: string, k: number): string {
+function initialPrompt(worktree: string, record: string, checksRecord: string, k: number, rejected?: string): string {
   return [
     `checks が失敗しています。原因を調べて、実装を直してください（test-fix の ${k} 回目）。`,
     "",
     `- checks の結果: ${checksRecord}（失敗したテスト、エラーの出力、失敗の指紋）`,
+    `- issue: ${join(runDir(worktree), "00-issue.md")}（受け入れ基準が仕様の正。計画やテストと食い違うときは、受け入れ基準を優先する）`,
     `- 計画: ${planPath(worktree)}`,
     ...(k > 1 ? [`- これまでの test-fix の記録: ${testFixDir(worktree)}（同じ直し方を繰り返さない）`] : []),
+    ...(rejected ? [`- テストの変更申請（${rejected}）は却下された。テストは変えずに、実装を直すこと。却下の理由: ${rejectionReason(rejected)}`] : []),
     "",
     "手順:",
-    `1. 先に原因を調べ、${record} に書く。frontmatter は status: in_progress、見出しは「## 原因」「## 修正」`,
-    "2. 実装を直し、テストを実行して通ることを確かめる",
-    "3. 「## 修正」に何をどう直したかを書き、frontmatter を status: done にする",
+    "1. 失敗しているテストごとに、その期待値が issue の受け入れ基準と合っているかを先に確かめる",
+    `2. 原因を調べ、${record} に書く。frontmatter は status: in_progress、見出しは「## 原因」「## 修正」`,
+    "3. テストが受け入れ基準と合っていれば、実装を直し、テストを実行して通ることを確かめる",
+    "4. 「## 修正」に何をどう直したかを書き、frontmatter を status: done にする",
+    "",
+    "テストのほうが受け入れ基準と合っていないとき（テストの変更申請）:",
+    `- 実装は変えずに、申請を ${changeRequestDir(worktree)} の test-<番号>.md に書いて終える`,
+    "- frontmatter に status: pending、tests（変えるテスト）、ac（根拠の AC の ID。必須）を書き、本文に「## 理由」（受け入れ基準のどこと食い違うか）と「## 変更内容」を書く",
+    "  frontmatter の例: 「status: pending」「tests: src/slug.test.ts > [TC-03] ...」「ac: AC-3」（それぞれ 1 行）",
+    "- 記録の「## 原因」に食い違いを、「## 修正」に「実装は変えず、テストの変更を申請した」と書き、status: done にする",
     "",
     "守ること:",
-    "- テストファイルは編集できない（ロックされている）。テストを変えずに、実装だけで直す",
+    "- テストファイルは編集できない（ロックされている）",
+    "- 受け入れ基準に反する実装にしてテストを通してはいけない（後のレビューで仕様違反として差し戻される）。その場合は必ず変更申請にする",
     "- テストに合わせた特別扱い（値のハードコード、テスト専用の分岐）はしない",
-    "- テストのほうが仕様（issue の受け入れ基準）と合っていないと判断したら、実装は変えずに「## 原因」にその根拠を書いて終える",
   ].join("\n")
+}
+
+// 却下された申請の「## 却下の理由」
+function rejectionReason(path: string): string {
+  if (!existsSync(path)) return "（申請のファイルがありません）"
+  return readFileSync(path, "utf8").match(/^##\s*却下の理由\s*\n([\s\S]*?)(?=^##\s|(?![\s\S]))/m)?.[1]?.trim() ?? "（理由の記載なし）"
 }
 
 function resumePrompt(record: string): string {

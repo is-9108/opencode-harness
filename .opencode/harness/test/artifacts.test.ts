@@ -23,3 +23,12 @@ test("項目を書き換え、なければ足す。frontmatter がなければ�
   assert.match(setFrontmatter("---\nstatus: done\n---\n", "approved", "true"), /status: done\napproved: true/)
   assert.match(setFrontmatter("本文\n", "status", "done"), /^---\nstatus: done\n---\n本文/)
 })
+
+test("「key:」の次の行から続く「  - item」のリストは、「, 」でつないだ値として読む", () => {
+  const text = "---\nstatus: pending\ntests:\n  - src/a.test.ts\n  - \"src/b.test.ts\"\nac:\n  - AC-3\nnote: x\n---\n本文\n"
+  const fm = readFrontmatter(text)
+  assert.equal(fm.tests, "src/a.test.ts, src/b.test.ts")
+  assert.equal(fm.ac, "AC-3")
+  assert.equal(fm.note, "x")
+  assert.equal(fm.status, "pending")
+})
