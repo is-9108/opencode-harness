@@ -18,6 +18,11 @@ export type RunState = {
   title?: string
   worktree?: string
   branch?: string
+  // 工程ごとの子セッションの ID（修正指示や再開のときに、同じセッションへ続きを送るため）
+  sessions?: Record<string, string>
+  // ユーザーの修正指示のうち、まだ子セッションに送っていないもの
+  feedback?: string
+  feedbackCount?: number
 }
 
 export type RunList = { runs: RunState[]; broken: { id: string; error: string }[] }

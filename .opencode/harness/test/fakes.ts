@@ -1,5 +1,5 @@
 // テスト用の偽の SessionApi。呼び出しを記録し、応答の仕方をテストごとに差し替えられる
-import type { AssistantResult, EventBus, SessionApi } from "../session.ts"
+import type { AssistantResult, EventBus, PollResult, SessionApi } from "../session.ts"
 
 export type FakeCall =
   | { op: "create"; parentID?: string; title: string; directory: string; permission?: unknown }
@@ -11,9 +11,12 @@ export function createFakeApi(bus: EventBus, opts: {
   onPrompt?: (sessionID: string, emitIdle: () => void) => void
   result?: AssistantResult | ((sessionID: string) => AssistantResult | undefined)
   promptError?: Error
+  // 状態の確認（poll）の応答。既定では「作業中」を返し、完了の判定はイベントに任せる
+  poll?: (sessionID: string, count: number) => PollResult
 } = {}) {
   const calls: FakeCall[] = []
   let seq = 0
+  let pollCount = 0
   const emitIdle = (sessionID: string) => () => bus.emit({ type: "session.idle", properties: { sessionID } })
   const api: SessionApi = {
     async create(input) {
@@ -28,6 +31,10 @@ export function createFakeApi(bus: EventBus, opts: {
     },
     async abort(input) {
       calls.push({ op: "abort", sessionID: input.sessionID })
+    },
+    async poll(input) {
+      pollCount++
+      return opts.poll ? opts.poll(input.sessionID, pollCount) : { status: "busy", lastAssistantCompleted: false }
     },
     async lastAssistant(input) {
       const r = opts.result ?? defaultResult()

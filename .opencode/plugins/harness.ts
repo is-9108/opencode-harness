@@ -7,15 +7,35 @@ import { formatStatus } from "../harness/status.ts"
 import { createStore, startRun } from "../harness/state.ts"
 import { createEventBus, runChild, type PermissionRule } from "../harness/session.ts"
 import { createSessionApi } from "../harness/sdk-adapter.ts"
-import { advance } from "../harness/machine/dev.ts"
+import { advance, record, type StepDeps } from "../harness/machine/dev.ts"
 import { realExec } from "../harness/exec.ts"
 
 type Ctx = { worktree: string; directory: string }
+type ToolCtx = Ctx & { sessionID: string; abort: AbortSignal; metadata(input: { title?: string }): void }
 const rootOf = (context: Ctx) => context.worktree || context.directory
 
 export const HarnessPlugin: Plugin = async ({ client }) => {
   const events = createEventBus()
   const api = createSessionApi(client)
+
+  // 工程の実行に必要な依存を組み立てる。設定に問題があれば、その説明の文章を返す
+  const stepDeps = (context: ToolCtx): StepDeps | string => {
+    const root = rootOf(context)
+    const load = loadConfig(root)
+    if (load.status !== "ok") return formatStatus(load)
+    const store = createStore(root)
+    return {
+      root,
+      config: load.config,
+      store,
+      exec: realExec,
+      child: ({ runId, ...opts }) =>
+        runChild(
+          { api, events, log: (e) => store.appendEvent(runId, e), progress: (title) => context.metadata({ title }) },
+          { ...opts, parentID: context.sessionID, signal: context.abort },
+        ),
+    }
+  }
 
   const tools: NonNullable<Hooks["tool"]> = {
     harness_status: tool({
@@ -49,10 +69,25 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
         run: tool.schema.string().describe("run の ID（例: issue-12）"),
       },
       async execute(args, context) {
-        const root = rootOf(context)
-        const load = loadConfig(root)
-        if (load.status !== "ok") return formatStatus(load)
-        const result = await advance({ root, config: load.config, store: createStore(root), exec: realExec }, args.run)
+        const deps = stepDeps(context)
+        if (typeof deps === "string") return deps
+        const result = await advance(deps, args.run)
+        return `結果: ${result.kind}\n${result.message}`
+      },
+    }),
+    harness_record: tool({
+      description:
+        "ユーザーの判断を記録する。harness_advance が need_user で承認を求めたとき、question ツールで聞いた結果をそのまま渡す。修正指示のときは、ユーザーの指示の内容を feedback に入れる。",
+      args: {
+        run: tool.schema.string().describe("run の ID（例: issue-12）"),
+        gate: tool.schema.enum(["plan"]).describe("どの承認か"),
+        decision: tool.schema.enum(["approved", "changes_requested", "aborted"]).describe("承認 / 修正指示 / 中断"),
+        feedback: tool.schema.string().optional().describe("修正指示の内容（changes_requested のときは必須）"),
+      },
+      async execute(args, context) {
+        const deps = stepDeps(context)
+        if (typeof deps === "string") return deps
+        const result = record(deps, args)
         return `結果: ${result.kind}\n${result.message}`
       },
     }),
