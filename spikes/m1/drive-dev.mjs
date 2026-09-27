@@ -24,14 +24,15 @@ const isIdle = async () => { const st = (await api("GET", "/session/status"))[se
 let approvals = Number(process.env.APPROVALS ?? 0)
 const started = Date.now()
 const perms = async () => { const all = await api("GET", "/permission"); for (const p of all.filter((x) => x.sessionID === session.id)) { log("PERMISSION:", p.permission, p.patterns.join(",")); await api("POST", `/session/${session.id}/permissions/${p.id}`, { response: "once" }) } }
-while (Date.now() - started < 20 * 60_000) {
+while (Date.now() - started < Number(process.env.TIMEOUT_MIN ?? 40) * 60_000) {
   await perms()
   const data = (await api("GET", "/question")).filter((q) => q.sessionID === session.id)
   for (const req of data ?? []) {
     const answers = req.questions.map((q) => {
       const labels = (q.options ?? []).map((o) => o.label)
       log("QUESTION:", q.question.replace(/\s+/g, " ").slice(0, 200), "| options:", labels.join(" / "))
-      const asksDetail = labels.length === 0 || /内容|具体|どのように|どう直/.test(q.question)
+      // 選択肢に「承認」があれば判断の問い、なければ修正内容を聞く問いとみなす（問いの文面に「具体的」などが入ることがあるため）
+      const asksDetail = labels.length === 0 || !labels.some((l) => /承認/.test(l))
       if (asksDetail) return [FEEDBACK]
       const want = approvals === 0 ? /修正/ : /承認/
       const pick = labels.find((l) => want.test(l)) ?? labels[0]

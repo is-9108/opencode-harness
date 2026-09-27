@@ -86,7 +86,8 @@ export async function runRed(deps: StepDeps, run: RunState): Promise<StepResult>
   let verdict: RedVerdict = { ok: false, problems: [], rows: [] }
 
   for (let attempt = 0; attempt <= MAX_RETURNS; attempt++) {
-    const result = await deps.child({ ...common, sessionID, prompt })
+    // ID は作った直後に保存し、途中で落ちても次は同じ子セッションで続きから進める
+    const result = await deps.child({ ...common, sessionID, prompt, onSession: (id) => deps.store.save({ ...run, sessions: { ...run.sessions, red: id } }) })
     if (result.status === "aborted") return { kind: "error", message: "red の子セッションが中断されました。harness_advance で再開できます" }
     if (result.status === "error") return { kind: "error", message: `red の子セッションがエラーで終わりました: ${result.error}` }
     sessionID = result.sessionID

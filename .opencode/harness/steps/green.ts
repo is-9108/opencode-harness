@@ -39,7 +39,7 @@ export async function runGreen(deps: StepDeps, run: RunState): Promise<StepResul
     if (sessionID) deps.store.save({ ...run, sessions: { ...run.sessions, green: sessionID } })
   }
 
-  const first = await deps.child({ ...common, sessionID: resuming, prompt: resuming ? resumePrompt(logPath) : initialPrompt(worktree, logPath, testCases) })
+  const first = await deps.child({ ...common, sessionID: resuming, onSession: save, prompt: resuming ? resumePrompt(logPath) : initialPrompt(worktree, logPath, testCases) })
   save(first.sessionID)
   if (first.status === "aborted") return { kind: "error", message: "green の子セッションが中断されました。harness_advance で、同じ子セッションの続きから再開できます" }
   if (first.status === "error") return { kind: "error", message: `green の子セッションがエラーで終わりました: ${first.error}` }
