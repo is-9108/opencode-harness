@@ -1,4 +1,4 @@
-// test-fix / テストの変更申請のテストで共通に使う組み立て（checks と修正の工程を、偽のシェルと偽の子エージェントで動かす）
+// test-fix / テストの変更申請 / review-fix のテストで共通に使う組み立て（checks と修正の工程を、偽のシェルと偽の子エージェントで動かす）
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
@@ -58,7 +58,7 @@ export const setupLoop = (checks: { code: number; junit: string }[], behaviors: 
   const { run } = startRun(store, { kind: "dev", issue: 12 })
   store.save({ ...run, step: "checks", worktree, branch: "feat/12-x", redCommit })
   const { config } = validateConfig({
-    models: opts.models ?? { "dev.implementer": ["openai/gpt-5.5"], "dev.test-fix": ["openai/gpt-5.6-sol"] },
+    models: opts.models ?? { "dev.implementer": ["openai/gpt-5.5"], "dev.test-fix": ["openai/gpt-5.6-sol"], "dev.review.spec": ["openai/gpt-6-sol"], "dev.review-fix": ["openai/gpt-5.7"] },
     checks: [{ name: "test", command: "npx vitest run", junit: "j.xml" }],
     tests: { globs: ["**/*.test.ts"], flakyRetries: 0 },
     ...(opts.loops ? { loops: opts.loops } : {}),
@@ -85,11 +85,11 @@ export const setupLoop = (checks: { code: number; junit: string }[], behaviors: 
     return { status: "completed", sessionID, text: "ok", tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } }, cost: 0, model: o.model }
   }
   const deps: StepDeps = { root, config, store, exec: realExec, shell, child }
-  // continue の間は進める
-  const drive = async (max = 20): Promise<StepResult> => {
+  // continue の間は、stopAt の工程に着くまで進める
+  const drive = async (max = 20, stopAt = "review"): Promise<StepResult> => {
     let r: StepResult = { kind: "continue", message: "" }
     for (let i = 0; i < max && r.kind === "continue"; i++) {
-      if (store.get(run.id)?.step === "review") break
+      if (store.get(run.id)?.step === stopAt) break
       r = await advance(deps, run.id)
     }
     return r

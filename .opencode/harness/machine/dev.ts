@@ -11,6 +11,7 @@ import { runChecks } from "../steps/checks.ts"
 import { runTestFix } from "../steps/test-fix.ts"
 import { pendingDecision, recordTestChange, runTestChange } from "../steps/test-change.ts"
 import { runReview } from "../steps/review.ts"
+import { runReviewFix } from "../steps/review-fix.ts"
 import { runPr } from "../steps/pr.ts"
 import { auditAfterStep } from "../steps/audit.ts"
 import { fixGuide } from "../steps/escalation.ts"
@@ -62,7 +63,7 @@ export async function advance(deps: StepDeps, runId: string): Promise<StepResult
 }
 
 // red より後の、テスト以外のコードを変える工程
-const AUDITED_STEPS = new Set(["green", "checks", "test-fix", "review", "pr"])
+const AUDITED_STEPS = new Set(["green", "checks", "test-fix", "review", "review-fix", "pr"])
 
 async function runStep(deps: StepDeps, run: RunState): Promise<StepResult> {
   switch (run.step) {
@@ -84,6 +85,8 @@ async function runStep(deps: StepDeps, run: RunState): Promise<StepResult> {
       return runTestChange(deps, run)
     case "review":
       return runReview(deps, run)
+    case "review-fix":
+      return runReviewFix(deps, run)
     case "pr":
       return runPr(deps, run)
     default:
