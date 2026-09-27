@@ -65,15 +65,15 @@ test("すべてのチェックが通れば、結果を checks/run-1.md に保存
   assert.equal(run?.checksRuns, 1)
 })
 
-test("lint だけが失敗しても、残りのチェックも実行して全結果を記録し、escalated になる", async () => {
+test("lint だけが失敗しても、残りのチェックも実行して全結果を記録し、test-fix に進む", async () => {
   const { deps, store, calls, record, runId } = setup({
     "npm run lint": { code: 1, stdout: "src/slug.ts\n  3:7  error  'x' is assigned a value but never used  no-unused-vars\n" },
     "npx vitest run": { code: 0, junit: PASSING_JUNIT },
   })
   const result = await advance(deps, runId)
 
-  assert.equal(result.kind, "escalated")
-  assert.match(result.message, /lint/)
+  assert.equal(result.kind, "continue")
+  assert.match(result.message, /test-fix/)
   assert.deepEqual(calls, ["npm run lint", "npx tsc --noEmit", "npx vitest run"])
   const text = readFileSync(record(1), "utf8")
   assert.match(text, /status: failed/)
@@ -81,17 +81,16 @@ test("lint だけが失敗しても、残りのチェックも実行して全結
   assert.match(text, /\| typecheck \| 成功/)
   assert.match(text, /no-unused-vars/)
   const run = store.get(runId)
-  assert.equal(run?.status, "escalated")
-  assert.equal(run?.step, "checks")
-  // エスカレーションの報告を書く（#33）
-  assert.equal(run?.lastEscalation?.reason, "loop_exhausted")
-  assert.match(readFileSync(run?.lastEscalation?.report ?? "", "utf8"), /lint/)
+  // 修正のループに進む（#35）
+  assert.equal(run?.status, "in_progress")
+  assert.equal(run?.step, "test-fix")
+  assert.equal(run?.testFix, 1)
 })
 
 test("タイムアウトしたチェックは失敗として記録する", async () => {
   const { deps, record, runId } = setup({ "npx tsc --noEmit": { code: 1, timedOut: true }, "npx vitest run": { code: 0, junit: PASSING_JUNIT } })
   const result = await advance(deps, runId)
-  assert.equal(result.kind, "escalated")
+  assert.match(result.message, /test-fix/)
   assert.match(readFileSync(record(1), "utf8"), /\| typecheck \| 失敗（タイムアウト: 5 秒）/)
 })
 

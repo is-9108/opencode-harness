@@ -16,6 +16,12 @@ const junit = (failed: Case[], passed: string[] = []) =>
     ...passed.map((n) => `<testcase classname="src/a.test.ts" name="${n}"/>`),
   ].join("")}</testsuite></testsuites>`
 
+// checks が失敗したら、test-fix のループに進む（#35）。advance した後の工程を返す
+const stepAfter = async (deps: StepDeps, runId: string) => {
+  await advance(deps, runId)
+  return deps.store.get(runId)?.step
+}
+
 type Script = { code: number; stdout?: string; timedOut?: boolean; junit?: string }
 
 // 偽のシェル。コマンドごとに、呼ばれた順に結果を返す（最後の結果は繰り返す）
@@ -71,18 +77,19 @@ test("1 回目に失敗し、再実行で通るテストは flaky として記�
 })
 
 test("一部のテストだけが再実行で通ったら、通ったものは flaky、すべての実行で失敗したものは本当の失敗として扱う", async () => {
-  const { deps, runId } = setup({ "npx vitest run": [{ code: 1, junit: junit([{ name: "[TC-02] b" }, { name: "[TC-01] a" }]) }, FAIL_TC2()] })
+  const { deps, record, runId } = setup({ "npx vitest run": [{ code: 1, junit: junit([{ name: "[TC-02] b" }, { name: "[TC-01] a" }]) }, FAIL_TC2()] })
   // TC-01 は 1 回目だけ失敗、TC-02 は両方で失敗 → TC-02 だけが本当の失敗
-  const result = await advance(deps, runId)
-  assert.equal(result.kind, "escalated")
-  const report = readFileSync(deps.store.get(runId)!.lastEscalation!.report, "utf8")
-  assert.match(report, /\[TC-02\] b/)
+  assert.equal(await stepAfter(deps, runId), "test-fix")
+  const text = record(1)
+  // 失敗したテストの表には本当の失敗だけ、flaky の一覧には 1 回目だけ失敗したテストを載せる
+  assert.match(text, /^\| \[TC-02\] b \|/m)
+  assert.doesNotMatch(text, /^\| \[TC-01\] a \|/m)
+  assert.match(text, /## flaky[\s\S]*- src\/a\.test\.ts > \[TC-01\] a/)
 })
 
 test("再実行でも失敗するテストは不合格にし、失敗の指紋を記録する（AC-2）", async () => {
   const { deps, store, record, runId } = setup({ "npx vitest run": [FAIL_TC2()] })
-  const result = await advance(deps, runId)
-  assert.equal(result.kind, "escalated")
+  assert.equal(await stepAfter(deps, runId), "test-fix")
   const fm = readFrontmatter(record(1))
   assert.match(fm.fingerprint ?? "", /^[0-9a-f]{16}$/)
   assert.deepEqual(store.get(runId)?.fingerprints, [fm.fingerprint])
@@ -90,13 +97,13 @@ test("再実行でも失敗するテストは不合格にし、失敗の指紋�
 
 test("flakyRetries が 0 なら再実行しない", async () => {
   const { deps, calls, runId } = setup({ "npx vitest run": [FAIL_TC2(), PASS] }, { flakyRetries: 0 })
-  assert.equal((await advance(deps, runId)).kind, "escalated")
+  assert.equal(await stepAfter(deps, runId), "test-fix")
   assert.deepEqual(calls, ["npm run lint", "npx vitest run"])
 })
 
 test("JUnit のないチェックは再実行しない", async () => {
   const { deps, calls, runId } = setup({ "npm run lint": [{ code: 1, stdout: "src/a.ts\n  3:7  error  'x' is never used  no-unused-vars\n" }, { code: 0 }], "npx vitest run": [PASS] })
-  assert.equal((await advance(deps, runId)).kind, "escalated")
+  assert.equal(await stepAfter(deps, runId), "test-fix")
   assert.equal(calls.filter((c) => c === "npm run lint").length, 1)
 })
 
@@ -127,7 +134,7 @@ test("失敗したテストの組み合わせが違えば、違う指紋にな�
 
 test("JUnit が出ない失敗（ビルドエラーなど）も、エラーの行から指紋を作る", async () => {
   const { deps, store, calls, runId } = setup({ "npx vitest run": [{ code: 1, stdout: "Error: Transform failed with 1 error:\nsrc/a.ts:3:10: ERROR: Unexpected \"}\"\n" }] })
-  assert.equal((await advance(deps, runId)).kind, "escalated")
+  assert.equal(await stepAfter(deps, runId), "test-fix")
   assert.equal(calls.filter((c) => c === "npx vitest run").length, 1)
   assert.match(store.get(runId)?.fingerprints?.[0] ?? "", /^[0-9a-f]{16}$/)
 })

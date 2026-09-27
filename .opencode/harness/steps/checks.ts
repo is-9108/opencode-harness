@@ -8,7 +8,7 @@ import type { RunState } from "../state.ts"
 import { parseJUnit, type TestCaseResult } from "../testing/junit.ts"
 import { fingerprint, normalizeMessage } from "../testing/fingerprint.ts"
 import { runDir } from "./common.ts"
-import { escalate } from "./escalation.ts"
+import { afterChecksFailed } from "./test-fix.ts"
 import { errorLines, judge, readBaseline, testId, type Judged } from "./baseline.ts"
 
 export type CheckOutcome = {
@@ -66,16 +66,12 @@ export async function runChecks(deps: StepDeps, run: RunState): Promise<StepResu
     const note = flaky.length ? `（flaky ${flaky.length} 件）` : ""
     return { kind: "continue", message: `checks がすべて通りました（${outcomes.map((o) => o.check.name).join("、")}）${note}。記録: ${recordPath}。次の工程: review` }
   }
-  // 修正のループ（test-fix）は #35 で入れる。それまでは、失敗したらエスカレーションする（上限 0 回のループとして扱う）
+  // 失敗したら、test-fix のループに入るか、上限や同じ指紋の連続でエスカレーションする（#35）
   const failed = outcomes.filter((o) => !o.judged.passed)
   const latest = { ...run, checksRuns: n, fingerprints: [...(run.fingerprints ?? []), fp!] }
   deps.store.save(latest)
-  return escalate(deps, latest, {
-    reason: "loop_exhausted",
-    summary: `checks が失敗しました（${failed.map((o) => o.check.name).join("、")}）。`,
-    history: [`checks ${n} 回目: 記録 ${recordPath}（失敗の指紋: ${fp}）`],
-    open: failed.flatMap((o) => [`${o.check.name}: ${summary(o)}`, ...stillFailing(o).map((t) => `${o.check.name}: ${testId(t)}`)]),
-  })
+  const open = failed.flatMap((o) => [`${o.check.name}: ${summary(o)}`, ...stillFailing(o).map((t) => `${o.check.name}: ${testId(t)}`)])
+  return afterChecksFailed(deps, latest, recordPath, fp!, open)
 }
 
 // ベースラインの失敗として除外したものを除いた、失敗したテスト
