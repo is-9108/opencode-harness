@@ -49,6 +49,10 @@ export type RunState = {
   // review-fix の回数（リセットしない）と、blocking の指摘の ID ごとに、出た周の履歴（再発の検知に使う。#37）
   reviewFix?: number
   findingRounds?: Record<string, number[]>
+  // spec_gap（#38）。回答を待っている曖昧な点（先頭から 1 件ずつ聞く）、すべて答えた後に続ける review-fix の入力、回答済みの ID
+  pendingSpecGaps?: SpecGap[]
+  specGapFollowUp?: { blocking: Finding[]; recurred: Finding[]; summary: string }
+  answeredGaps?: string[]
   // human: エスカレーションの後。以降は review-fix を自動で実行しない（戻さない。計画 8.3）
   mode?: "auto" | "human"
   // エスカレーションした回数と、最後のエスカレーション（#33）
@@ -58,6 +62,10 @@ export type RunState = {
   prNumber?: number
   prUrl?: string
 }
+
+// レビューの指摘（steps/review.ts の Finding と同じ形。state.ts が工程のモジュールに依存しないよう、ここで定義する）
+export type Finding = { id: string; key: string; category: string; blocking: boolean; ac: string; evidence: string; content: string }
+export type SpecGap = { id: string; key: string; ac: string; content: string; options: string[]; round: number }
 
 export type RunList = { runs: RunState[]; broken: { id: string; error: string }[] }
 

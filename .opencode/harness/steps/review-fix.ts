@@ -9,6 +9,7 @@ import { enforceLock } from "./audit.ts"
 import { runDir } from "./common.ts"
 import { planPath } from "./plan.ts"
 import { checkpoint } from "./red.ts"
+import { decisionsPath } from "./spec-gap.ts"
 import { fixerPermissions, isRecordDone } from "./test-fix.ts"
 
 const MODEL_KEYS = ["dev.review-fix", "dev.test-fix", "dev.implementer"]
@@ -80,6 +81,7 @@ function initialPrompt(worktree: string, record: string, summary: string, k: num
     `- レビューの集計: ${summary}（「## blocking（ループの対象）」の欄だけが対象。ほかの欄の指摘には対応しない）`,
     `- issue: ${join(runDir(worktree), "00-issue.md")}（受け入れ基準が仕様の正）`,
     `- 計画: ${planPath(worktree)}`,
+    ...(existsSync(decisionsPath(worktree)) ? [`- 仕様の確認の記録: ${decisionsPath(worktree)}（ユーザーが決めた解釈。受け入れ基準と合わせて仕様の正とする）`] : []),
     ...(k > 1 ? [`- これまでの review-fix の記録: ${reviewFixDir(worktree)}（一度直した指摘を、別の指摘を直すために元に戻さない）`] : []),
     "",
     "手順:",

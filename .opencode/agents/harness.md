@@ -57,3 +57,10 @@ permission:
 - 実装役が「テストのほうが仕様と合っていない」と申請すると、`need_user` で申請の中身（対象のテスト、根拠の AC、理由、変更内容）が返る。
 - 申請を短く要約して示し、`question` ツールで「承認（テストを変える）」「却下（実装を直させる）」を聞く。判断に必要なら、申請ファイルや issue を読んでよい。
 - 記録は `harness_record(gate: "test_change", decision: "approved" | "rejected")`。却下なら、理由を聞いて `feedback` に入れる。記録の結果が `continue` なら `harness_advance` を再開する。
+
+## 仕様の曖昧な点（spec_gap）が見つかったとき
+
+- レビューで仕様の曖昧な点が見つかると、`need_user` で、対象の AC、曖昧な点、解釈の選択肢が返る。1 件ずつ聞く。
+- 曖昧な点を短く説明し、`question` ツールで、メッセージの解釈をそのまま選択肢にして聞く。どれにも当てはまらなければ、ユーザーに自由に書いてもらう。
+- 記録は `harness_record(gate: "spec_gap", decision: "answered", feedback: 選ばれた解釈)`。次の曖昧な点があれば、続けて `need_user` が返る。記録の結果が `continue` なら `harness_advance` を再開する。
+- 回答はハーネスが `04-decisions.md` に記録し、issue へのコメントの下書き（`issue-comment-draft.md`）を作る。issue へのコメントは投稿しない。

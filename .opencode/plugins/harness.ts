@@ -85,14 +85,14 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
     }),
     harness_record: tool({
       description:
-        "ユーザーの判断を記録する。harness_advance が need_user で判断を求めたとき、question ツールで聞いた結果をそのまま渡す。計画の承認（gate: plan）は approved / changes_requested / aborted、依存先の確認（gate: dependency）は wait / stack / ignore、テストの変更申請（gate: test_change）は approved / rejected。修正指示や却下のときは、ユーザーの指示や理由を feedback に入れる。",
+        "ユーザーの判断を記録する。harness_advance が need_user で判断を求めたとき、question ツールで聞いた結果をそのまま渡す。計画の承認（gate: plan）は approved / changes_requested / aborted、依存先の確認（gate: dependency）は wait / stack / ignore、テストの変更申請（gate: test_change）は approved / rejected、仕様の曖昧な点（gate: spec_gap）は answered。修正指示や却下のときは、ユーザーの指示や理由を feedback に入れる。spec_gap では、ユーザーが選んだ解釈（または回答の文）を feedback に入れる。",
       args: {
         run: tool.schema.string().describe("run の ID（例: issue-12）"),
-        gate: tool.schema.enum(["plan", "dependency", "test_change"]).describe("どの判断か（plan: 計画の承認、dependency: 依存先の issue の確認、test_change: テストの変更申請）"),
+        gate: tool.schema.enum(["plan", "dependency", "test_change", "spec_gap"]).describe("どの判断か（plan: 計画の承認、dependency: 依存先の issue の確認、test_change: テストの変更申請、spec_gap: 仕様の曖昧な点への回答）"),
         decision: tool.schema
-          .enum(["approved", "changes_requested", "aborted", "wait", "stack", "ignore", "rejected"])
-          .describe("plan: 承認 / 修正指示 / 中断。dependency: 待つ / 依存先のブランチの上に積む / 無視して進める。test_change: 承認 / 却下"),
-        feedback: tool.schema.string().optional().describe("修正指示の内容・却下の理由（changes_requested / rejected のときは必須）"),
+          .enum(["approved", "changes_requested", "aborted", "wait", "stack", "ignore", "rejected", "answered"])
+          .describe("plan: 承認 / 修正指示 / 中断。dependency: 待つ / 依存先のブランチの上に積む / 無視して進める。test_change: 承認 / 却下。spec_gap: 回答した"),
+        feedback: tool.schema.string().optional().describe("修正指示の内容・却下の理由・spec_gap への回答（changes_requested / rejected / answered のときは必須）"),
       },
       async execute(args, context) {
         const denied = guardHarnessTool(context.agent)

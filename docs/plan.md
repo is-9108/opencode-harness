@@ -1,6 +1,6 @@
-# opencode ハーネス 実装計画（v3.1）
+# opencode ハーネス 実装計画（v3.2）
 
-- 作成日: 2026-09-25 / 改訂: 2026-09-26（v3.1: M0 の結果を反映）
+- 作成日: 2026-09-25 / 改訂: 2026-09-26（v3.1: M0 の結果を反映）、2026-09-27（v3.2: spec_gap の記録の方法）
 - 対象: opencode 1.18.x / Windows 11 / gh 2.96
 
 ## 0. 変更履歴
@@ -11,6 +11,7 @@
 | v2 | TUI 中心に変更。決定的な処理を opencode のプラグインとカスタムツールに組み込む。240k トークンでの圧縮 |
 | v3 | レビューで挙がった 23 項目を反映。主な変更は次のとおり。**テストを書く役と実装する役を分け、テストファイルをロックする**。git の書き込みはハーネスだけが行う。進展のないループを早めに止める。免除リスト。spec_gap の経路。issue ごとの worktree。ベースラインの確認。完了の定義を lint / 型 / ビルド / 全テストまで広げる。トークンとコストの予算。PR 後のフィードバック対応。ハーネス自体の評価。マイルストーンを「先に一本道を通す」形に変更 |
 | v3.1 | M0 の結果（[docs/spikes.md](spikes.md)）を反映。上限の検知を「エラー」から「`session.status` の retry」に変更。対話中の司令塔も自動でモデルを切り替える。モデルの疎通の確認を追加。権限は子セッションの作成時に動的に渡す。子セッションへの依頼は `prompt_async` とイベントで待つ。レビューのキャッシュの工夫を削除 |
+| v3.2 | spec_gap の回答を `harness_answer` ではなく `harness_record`（gate: `spec_gap`）で記録する形に変更。issue へのコメントは下書きまでとし、投稿しない（#38） |
 
 ---
 
@@ -97,7 +98,7 @@
 | 「ユーザー招待機能を作りたい」 | `harness_start(kind: "req")` |
 | 「issue 12 を進めて」「続きをやって」 | `harness_status` → `harness_advance` |
 | 「その指摘は対応しなくていい」 | `harness_waive`（免除リストに追加する） |
-| 「その仕様は、期限切れなら 404 を返すのが正しい」 | `harness_answer`（spec_gap への回答を記録する） |
+| 「その仕様は、期限切れなら 404 を返すのが正しい」 | `harness_record`（gate: `spec_gap`。spec_gap への回答を記録する） |
 | 「PR にレビューコメントが付いたので対応して」 | `/fix` と同じ流れ（PR フィードバックモード） |
 
 ## 4. プラグインが提供するツール
@@ -107,9 +108,8 @@
 | `harness_start(kind, arg)` | run を作る（`req` / `dev` / `fix`）。すでにあれば既存の run を返す |
 | `harness_status(runId?)` | 状態、工程、ループ回数、トークンとコスト、次にやること |
 | `harness_advance(runId)` | 自動で進められる工程を 1 つ実行する。戻り値は `continue` / `need_user`（何を聞くか、読むべき成果物）/ `escalated`（理由の種類）/ `waiting_quota`（再開できる時刻）/ `done` のいずれか |
-| `harness_record(runId, gate, decision, feedback?)` | 承認・修正指示・中断を記録する |
+| `harness_record(runId, gate, decision, feedback?)` | 承認・修正指示・中断など、ユーザーの判断を記録する。spec_gap への回答もこのツールで記録する（gate: `spec_gap`、decision: `answered`、feedback に回答）。回答は `04-decisions.md` に追記し、issue へのコメントは `issue-comment-draft.md` に下書きを作るだけで投稿しない |
 | `harness_waive(runId, findingId, reason)` | 指摘を免除リストに追加する |
-| `harness_answer(runId, questionId, answer)` | spec_gap への回答を記録する。`04-decisions.md` と issue のコメントへの反映もこのツールで行う（issue への書き込みは、TUI で確認を取ってから） |
 | `harness_models()` | 工程ごとのモデルと、プロバイダの上限状態 |
 
 - 1 回の呼び出しで 1 工程だけを進める（タイムアウトを避け、進み具合を見せるため）。
@@ -300,12 +300,15 @@ stateDiagram-v2
   checks --> testFix: 失敗
   testFix --> checks
   checks --> review: 合格
+  review --> specGap: spec_gap あり
+  specGap --> reviewFix: 回答後、blocking あり
+  specGap --> review: 回答後、blocking なし
   review --> reviewFix: blocking あり
   reviewFix --> checks
   review --> safetyGate: blocking なし
   safetyGate --> pr
   pr --> [*]
-  note right of checks: 回数の上限・同じ指紋・予算超過・spec_gap・テストの変更申請・依存の追加 → escalated
+  note right of checks: 回数の上限・同じ指紋・予算超過・テストの変更申請・依存の追加 → escalated
 ```
 
 | 工程 | 実行者 | 内容 |
@@ -393,13 +396,14 @@ stateDiagram-v2
 |---|---|---|
 | `spec_violation` | ○ | review-fix で直す |
 | `test_gaming` | ○ | review-fix で直す |
-| `spec_gap` | × | **すぐに人に聞く**（`harness_answer`）。回答は `04-decisions.md` と issue のコメントに反映する |
+| `spec_gap` | × | **すぐに人に聞く**（`harness_record` の gate: `spec_gap`）。回答は `04-decisions.md` に記録し、issue へのコメントは下書き（`issue-comment-draft.md`）まで |
 | `safety_critical` | × | ループでは直さず、safetyGate で人が確認する |
 | `other` | × | PR 本文の「参考」の欄に載せる |
 
 - **根拠が必須**: blocking の指摘には、AC の ID と「ファイル:行」を書く。根拠がないものは、judge が `other` に落とす。
 - **免除リスト**: `waivers.md` にある指摘は、judge が blocking として数えない。免除はユーザーだけが `harness_waive` で追加できる。
 - 2 周目以降は、前回からの差分と、前回の blocking 指摘が解消したかだけを見る。
+- **spec_gap の経路**: 根拠（曖昧な AC の ID と、「解釈1: … / 解釈2: …」の 2 つ以上の解釈）がそろった spec_gap だけを人に聞く。根拠がなければ `other` に落とす。複数あれば 1 件ずつ聞き、blocking の指摘と同時に出たら、先に聞いてから review-fix に進む。blocking がなければ、決まった解釈で差分の全体をもう一度レビューする（ループの回数には数えない。聞き続けることへの歯止めは、予算（子セッションの数）で行う）。回答済みの spec_gap は再び聞かない。`04-decisions.md` は、以降のレビューと review-fix の入力に含める。
 
 ### 8.5 エスカレーション
 `escalation-<e>.md` に、**理由の種類**（`loop_exhausted` / `no_progress` / `oscillation` / `budget` / `test_change_request` / `dependency` / `safety` / `issue_changed`）、止まるまでの経緯、試した修正、diff の統計、未解決の論点を書く。司令塔はその要約を示し、次にやることを案内する。
