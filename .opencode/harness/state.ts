@@ -37,6 +37,11 @@ export type RunState = {
   checksRuns?: number
   // review を実行した回数（reviews/round-<n>/ の n）
   reviewRounds?: number
+  // human: エスカレーションの後。以降は review-fix を自動で実行しない（戻さない。計画 8.3）
+  mode?: "auto" | "human"
+  // エスカレーションした回数と、最後のエスカレーション（#33）
+  escalations?: number
+  lastEscalation?: { number: number; reason: string; report: string }
   // pr の工程で作成・更新した PR
   prNumber?: number
   prUrl?: string

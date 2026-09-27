@@ -9,6 +9,7 @@ import type { PermissionRule } from "../session.ts"
 import { parseJUnit, type TestCaseResult } from "../testing/junit.ts"
 import { createLock } from "../testing/lock.ts"
 import { baseChildPermissions, runDir } from "./common.ts"
+import { escalate } from "./escalation.ts"
 import { parsePlan, planPath, type TestCase } from "./plan.ts"
 
 const MODEL_KEY = "dev.test-writer"
@@ -102,11 +103,13 @@ export async function runRed(deps: StepDeps, run: RunState): Promise<StepResult>
 
   const current: RunState = { ...run, sessions: { ...run.sessions, ...(sessionID ? { red: sessionID } : {}) } }
   if (!verdict.ok) {
-    deps.store.save({ ...current, status: "escalated" })
-    return {
-      kind: "escalated",
-      message: [`red の検証に ${MAX_RETURNS} 回差し戻しても合格しませんでした（記録: ${join(runDir(worktree), "02-red.md")}）:`, ...verdict.problems.map((p) => `- ${p}`)].join("\n"),
-    }
+    deps.store.save(current)
+    return escalate(deps, current, {
+      reason: "loop_exhausted",
+      summary: `red の検証に ${MAX_RETURNS} 回差し戻しても合格しませんでした。`,
+      history: [`red の検証の記録: ${join(runDir(worktree), "02-red.md")}`],
+      open: verdict.problems,
+    })
   }
 
   const commit = await checkpoint(deps, worktree, `test: #${run.issue} のテストを追加（red）`)

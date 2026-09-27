@@ -34,6 +34,10 @@ function formatRuns({ runs, broken }: RunList): string[] {
     lines.push("| run | 種類 | 状態 | 工程 | 更新 |", "|---|---|---|---|---|")
     for (const r of runs) lines.push(`| ${r.id} | ${r.kind} | ${STATUS_LABEL[r.status]} | ${r.step} | ${r.updatedAt} |`)
   }
+  // エスカレーションした run は、理由の種類と報告のパスを添える（#33）
+  const escalated = runs.filter((r) => r.status === "escalated" && r.lastEscalation)
+  if (escalated.length > 0)
+    lines.push("", "エスカレーション:", ...escalated.map((r) => `- ${r.id}: ${r.lastEscalation!.reason}（報告: ${r.lastEscalation!.report}）`))
   if (broken.length > 0) lines.push("", "読み込めない run:", ...broken.map((b) => `- ${b.id}: ${b.error}`))
   return lines
 }

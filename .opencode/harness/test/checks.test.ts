@@ -83,6 +83,9 @@ test("lint だけが失敗しても、残りのチェックも実行して全結
   const run = store.get(runId)
   assert.equal(run?.status, "escalated")
   assert.equal(run?.step, "checks")
+  // エスカレーションの報告を書く（#33）
+  assert.equal(run?.lastEscalation?.reason, "loop_exhausted")
+  assert.match(readFileSync(run?.lastEscalation?.report ?? "", "utf8"), /lint/)
 })
 
 test("タイムアウトしたチェックは失敗として記録する", async () => {

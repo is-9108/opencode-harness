@@ -7,6 +7,7 @@ import type { StepDeps, StepResult } from "../machine/dev.ts"
 import type { RunState } from "../state.ts"
 import { parseJUnit, type TestCaseResult } from "../testing/junit.ts"
 import { runDir } from "./common.ts"
+import { escalate } from "./escalation.ts"
 import { errorLines, judge, readBaseline, testId, type Judged } from "./baseline.ts"
 
 export type CheckOutcome = {
@@ -59,13 +60,16 @@ export async function runChecks(deps: StepDeps, run: RunState): Promise<StepResu
     deps.store.save({ ...run, checksRuns: n, step: "review" })
     return { kind: "continue", message: `checks がすべて通りました（${outcomes.map((o) => o.check.name).join("、")}）。記録: ${recordPath}。次の工程: review` }
   }
-  // M1 では失敗したら止める。修正のループ（test-fix）は M2 で入れる
-  deps.store.save({ ...run, checksRuns: n, status: "escalated" })
+  // 修正のループ（test-fix）は #35 で入れる。それまでは、失敗したらエスカレーションする（上限 0 回のループとして扱う）
   const failed = outcomes.filter((o) => !o.judged.passed)
-  return {
-    kind: "escalated",
-    message: [`checks が失敗しました（checks_failed）。記録: ${recordPath}`, ...failed.map((o) => `- ${o.check.name}: ${summary(o)}`)].join("\n"),
-  }
+  const latest = { ...run, checksRuns: n }
+  deps.store.save(latest)
+  return escalate(deps, latest, {
+    reason: "loop_exhausted",
+    summary: `checks が失敗しました（${failed.map((o) => o.check.name).join("、")}）。`,
+    history: [`checks ${n} 回目: 記録 ${recordPath}`],
+    open: failed.map((o) => `${o.check.name}: ${summary(o)}`),
+  })
 }
 
 export async function runOne(deps: StepDeps, worktree: string, check: Check): Promise<CheckOutcome> {
