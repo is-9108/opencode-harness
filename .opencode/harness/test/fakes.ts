@@ -1,0 +1,46 @@
+// テスト用の偽の SessionApi。呼び出しを記録し、応答の仕方をテストごとに差し替えられる
+import type { AssistantResult, EventBus, SessionApi } from "../session.ts"
+
+export type FakeCall =
+  | { op: "create"; parentID?: string; title: string; directory: string; permission?: unknown }
+  | { op: "promptAsync"; sessionID: string; directory: string; agent: string; model: { providerID: string; modelID: string }; text: string }
+  | { op: "abort"; sessionID: string }
+
+export function createFakeApi(bus: EventBus, opts: {
+  // promptAsync が呼ばれたときの振る舞い。既定では、次のティックで idle を通知する
+  onPrompt?: (sessionID: string, emitIdle: () => void) => void
+  result?: AssistantResult | ((sessionID: string) => AssistantResult | undefined)
+  promptError?: Error
+} = {}) {
+  const calls: FakeCall[] = []
+  let seq = 0
+  const emitIdle = (sessionID: string) => () => bus.emit({ type: "session.idle", properties: { sessionID } })
+  const api: SessionApi = {
+    async create(input) {
+      calls.push({ op: "create", ...input })
+      return { id: `ses_fake_${++seq}` }
+    },
+    async promptAsync(input) {
+      calls.push({ op: "promptAsync", ...input })
+      if (opts.promptError) throw opts.promptError
+      const onPrompt = opts.onPrompt ?? ((_id, idle) => setTimeout(idle, 0))
+      onPrompt(input.sessionID, emitIdle(input.sessionID))
+    },
+    async abort(input) {
+      calls.push({ op: "abort", sessionID: input.sessionID })
+    },
+    async lastAssistant(input) {
+      const r = opts.result ?? defaultResult()
+      return typeof r === "function" ? r(input.sessionID) : r
+    },
+  }
+  return { api, calls }
+}
+
+export const defaultResult = (): AssistantResult => ({
+  text: "done",
+  providerID: "openai",
+  modelID: "gpt-6-luna",
+  tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
+  cost: 0,
+})
