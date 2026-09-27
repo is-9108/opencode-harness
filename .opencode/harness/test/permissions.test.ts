@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
-import { HARNESS_AGENTS, SECRET_DENY, guardHarnessTool } from "../permissions.ts"
+import { HARNESS_AGENTS, SECRET_DENY, filterGrepOutput, guardHarnessTool, isSecretPath } from "../permissions.ts"
 import type { PermissionRule } from "../session.ts"
 
 // エージェント定義の frontmatter の permission を、opencode と同じ順序のルールの列にする。
@@ -85,3 +85,44 @@ test("ハーネスのツールは、司令塔（harness）からだけ使える�
     assert.match(message, /harness/)
   }
 })
+
+// grep ツールの出力（opencode 1.18 の tool/grep.ts の形式）
+const grepOutput = (files: [path: string, lines: string[]][], extra = "") =>
+  [
+    `Found ${files.reduce((n, [, l]) => n + l.length, 0)} matches${extra}`,
+    ...files.flatMap(([p, lines], i) => [...(i ? [""] : []), `${p}:`, ...lines.map((l, j) => `  Line ${j + 1}: ${l}`)]),
+  ].join("\n")
+
+test("秘密情報のファイルのパスを判定する（.env.example は除く）", () => {
+  for (const p of ["C:\\work\\repo\\.env", "/work/repo/.env.local", "config/id_rsa", "certs/server.pem", "certs/server.key"])
+    assert.equal(isSecretPath(p), true, p)
+  for (const p of ["/work/repo/.env.example", "C:\\work\\repo\\src\\env.ts", "src/keys.ts"]) assert.equal(isSecretPath(p), false, p)
+})
+
+test("grep の結果から、秘密情報のファイルの行を取り除き、件数を数え直す", () => {
+  const out = grepOutput([
+    ["C:\\work\\repo\\.env", ["API_TOKEN=secret"]],
+    ["C:\\work\\repo\\src\\a.ts", ["const a = 1", "const b = 2"]],
+    ["C:\\work\\repo\\.env.example", ["API_TOKEN="]],
+  ])
+  const filtered = filterGrepOutput(out)
+  assert.doesNotMatch(filtered, /secret/)
+  assert.ok(!filtered.includes("C:\\work\\repo\\.env:"))
+  assert.match(filtered, /^Found 3 matches/)
+  assert.ok(filtered.includes("C:\\work\\repo\\src\\a.ts:\n  Line 1: const a = 1\n  Line 2: const b = 2"))
+  assert.ok(filtered.includes("C:\\work\\repo\\.env.example:\n  Line 1: API_TOKEN="))
+  assert.match(filtered, /秘密情報.*1 件/)
+})
+
+test("秘密情報のファイルしか一致しなければ、一致なしとして返す", () => {
+  const filtered = filterGrepOutput(grepOutput([["/work/repo/.env", ["API_TOKEN=secret"]]]))
+  assert.doesNotMatch(filtered, /secret/)
+  assert.match(filtered, /^No files found/)
+})
+
+test("秘密情報のファイルがなければ、grep の結果を変えない", () => {
+  const out = grepOutput([["/work/repo/src/a.ts", ["const a = 1"]]], " (more matches available)")
+  assert.equal(filterGrepOutput(out), out)
+  assert.equal(filterGrepOutput("No files found"), "No files found")
+})
+
