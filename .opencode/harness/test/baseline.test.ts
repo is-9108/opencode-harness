@@ -14,6 +14,12 @@ const junit = (cases: { name: string; failed?: boolean }[]) =>
     .map((c) => (c.failed ? `<testcase classname="src/a.test.ts" name="${c.name}"><failure type="AssertionError" message="expected 1 to be 2"/></testcase>` : `<testcase classname="src/a.test.ts" name="${c.name}"/>`))
     .join("")}</testsuite></testsuites>`
 
+// checks が失敗したら、test-fix のループに進む（#35）。advance した後の工程を返す
+const stepAfter = async (deps: StepDeps, runId: string) => {
+  await advance(deps, runId)
+  return deps.store.get(runId)?.step
+}
+
 type Script = { code: number; stdout?: string; timedOut?: boolean; junit?: string }
 
 // 偽のシェル。scripts を差し替えると、ベースラインのときと checks のときで結果を変えられる
@@ -65,7 +71,7 @@ test("ベースラインが空なら、checks の判定は今までどおり（�
   const { deps, state, worktree, runId } = setup({ "npx vitest run": { code: 0, junit: passingTests } })
   await recordBaseline(deps, worktree)
   state.scripts = { "npx vitest run": { code: 1, junit: junit([{ name: "[TC-01] a", failed: true }]) } }
-  assert.equal((await advance(deps, runId)).kind, "escalated")
+  assert.equal(await stepAfter(deps, runId), "test-fix")
 })
 
 test("ベースラインでもともと失敗しているテストは除外し、ほかがすべて通れば合格にする（AC-2）", async () => {
@@ -87,9 +93,7 @@ test("ベースラインにないテストが失敗したら、不合格にす�
   const { deps, state, worktree, runId } = setup({ "npx vitest run": { code: 1, junit: junit([{ name: OLD_FAIL, failed: true }]) } })
   await recordBaseline(deps, worktree)
   state.scripts = { "npx vitest run": { code: 1, junit: junit([{ name: OLD_FAIL, failed: true }, { name: "[TC-01] a", failed: true }]) } }
-  const result = await advance(deps, runId)
-  assert.equal(result.kind, "escalated")
-  assert.match(result.message, /test/)
+  assert.equal(await stepAfter(deps, runId), "test-fix")
 })
 
 test("ベースラインで失敗していたテストが通るようになったら、合格のまま「解消した」と記録する（AC-3）", async () => {
@@ -122,19 +126,19 @@ test("JUnit のないチェックで、ベースラインにないエラーの�
     "npx tsc --noEmit": { code: 2, stdout: tscOld + "src/new.ts(1,1): error TS2304: Cannot find name 'foo'.\n" },
     "npx vitest run": { code: 0, junit: passingTests },
   }
-  assert.equal((await advance(deps, runId)).kind, "escalated")
+  assert.equal(await stepAfter(deps, runId), "test-fix")
 })
 
 test("ベースラインで失敗していても、比べる手がかり（error の行）がなければ除外しない", async () => {
   const { deps, state, worktree, runId } = setup({ "npx tsc --noEmit": { code: 1, stdout: "something went wrong\n" }, "npx vitest run": { code: 0, junit: passingTests } })
   await recordBaseline(deps, worktree)
   state.scripts = { "npx tsc --noEmit": { code: 1, stdout: "something went wrong\n" }, "npx vitest run": { code: 0, junit: passingTests } }
-  assert.equal((await advance(deps, runId)).kind, "escalated")
+  assert.equal(await stepAfter(deps, runId), "test-fix")
 })
 
 test("タイムアウトは、ベースラインで失敗していても除外しない", async () => {
   const { deps, state, worktree, runId } = setup({ "npx vitest run": { code: 1, junit: junit([{ name: OLD_FAIL, failed: true }]) } })
   await recordBaseline(deps, worktree)
   state.scripts = { "npx vitest run": { code: 1, timedOut: true, junit: junit([{ name: OLD_FAIL, failed: true }]) } }
-  assert.equal((await advance(deps, runId)).kind, "escalated")
+  assert.equal(await stepAfter(deps, runId), "test-fix")
 })

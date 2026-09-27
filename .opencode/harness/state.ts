@@ -37,6 +37,9 @@ export type RunState = {
   checksRuns?: number
   // 失敗した checks の指紋の履歴（#34）。同じ指紋が続いたら進んでいないとみなす（#35）
   fingerprints?: string[]
+  // test-fix の回数（/fix で 0 に戻す）と、自動の修正（test-fix と review-fix）の合計。工程に入る前に加算する（#35）
+  testFix?: number
+  autoFixUsed?: number
   // review を実行した回数（reviews/round-<n>/ の n）
   reviewRounds?: number
   // human: エスカレーションの後。以降は review-fix を自動で実行しない（戻さない。計画 8.3）

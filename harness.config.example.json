@@ -16,6 +16,10 @@
       "opencode-go/kimi-k2.7-code",
       "openai/gpt-5.5"
     ],
+    "dev.test-fix": [
+      "opencode-go/kimi-k2.7-code",
+      "openai/gpt-5.5"
+    ],
     "dev.review.spec": [
       "opencode-go/qwen3.8-max",
       "openai/gpt-6-sol"
