@@ -6,6 +6,7 @@ import type { RunState, Store } from "../state.ts"
 import { runSetup } from "../steps/setup.ts"
 import { recordPlan, runPlan, waitApproval } from "../steps/plan.ts"
 import { runRed } from "../steps/red.ts"
+import { runGreen } from "../steps/green.ts"
 import { auditAfterStep } from "../steps/audit.ts"
 
 export type StepDeps = {
@@ -49,6 +50,8 @@ async function runStep(deps: StepDeps, run: RunState): Promise<StepResult> {
       return waitApproval(run)
     case "red":
       return runRed(deps, run)
+    case "green":
+      return runGreen(deps, run)
     default:
       return { kind: "error", message: `工程 ${run.step} はまだ実装されていません` }
   }
