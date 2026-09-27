@@ -9,9 +9,10 @@ import { createEventBus, runChild, type PermissionRule } from "../harness/sessio
 import { createSessionApi } from "../harness/sdk-adapter.ts"
 import { advance, record, type StepDeps } from "../harness/machine/dev.ts"
 import { realExec, realShell } from "../harness/exec.ts"
+import { filterGrepOutput, guardHarnessTool } from "../harness/permissions.ts"
 
 type Ctx = { worktree: string; directory: string }
-type ToolCtx = Ctx & { sessionID: string; abort: AbortSignal; metadata(input: { title?: string }): void }
+type ToolCtx = Ctx & { sessionID: string; agent: string; abort: AbortSignal; metadata(input: { title?: string }): void }
 const rootOf = (context: Ctx) => context.worktree || context.directory
 
 export const HarnessPlugin: Plugin = async ({ client }) => {
@@ -44,6 +45,8 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
         "ハーネス（要件定義・TDD 開発・修正の自動化）の状態を表示する。run の一覧、状態、現在の工程、設定の誤りや警告を返す。ユーザーがハーネスの状態・進み具合を尋ねたときに使う。",
       args: {},
       async execute(_args, context) {
+        const denied = guardHarnessTool(context.agent)
+        if (denied) return denied
         const root = rootOf(context)
         return formatStatus(loadConfig(root), createStore(root).list())
       },
@@ -56,6 +59,8 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
         arg: tool.schema.number().int().positive().describe("dev のときは issue 番号"),
       },
       async execute(args, context) {
+        const denied = guardHarnessTool(context.agent)
+        if (denied) return denied
         const root = rootOf(context)
         const load = loadConfig(root)
         if (load.status !== "ok") return formatStatus(load)
@@ -70,6 +75,8 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
         run: tool.schema.string().describe("run の ID（例: issue-12）"),
       },
       async execute(args, context) {
+        const denied = guardHarnessTool(context.agent)
+        if (denied) return denied
         const deps = stepDeps(context)
         if (typeof deps === "string") return deps
         const result = await advance(deps, args.run)
@@ -86,6 +93,8 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
         feedback: tool.schema.string().optional().describe("修正指示の内容（changes_requested のときは必須）"),
       },
       async execute(args, context) {
+        const denied = guardHarnessTool(context.agent)
+        if (denied) return denied
         const deps = stepDeps(context)
         if (typeof deps === "string") return deps
         const result = record(deps, args)
@@ -133,6 +142,10 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
 
   return {
     tool: tools,
+    // grep の結果から .env などの秘密情報の行を取り除く（read の拒否だけでは grep で読めてしまうため）
+    "tool.execute.after": async (input, output) => {
+      if (input.tool === "grep" && typeof output.output === "string") output.output = filterGrepOutput(output.output)
+    },
     event: async ({ event }) => {
       events.emit(event as { type: string; properties?: Record<string, unknown> })
     },

@@ -13,6 +13,18 @@ permission:
     "git diff*": allow
     "git log*": allow
     "git show*": allow
+    # 依存の追加は拒否し、ロックファイルどおりに入れ直すことだけを許可する
+    "npm ci": allow
+    "npm install": allow
+  # .env や秘密鍵は読まない（子セッションの作成時にも、同じ拒否を最後に付ける）
+  read:
+    "*": allow
+    "*.env": deny
+    "*.env.*": deny
+    "*.env.example": allow
+    "*id_rsa*": deny
+    "*.pem": deny
+    "*.key": deny
   webfetch: deny
   websearch: deny
   question: deny

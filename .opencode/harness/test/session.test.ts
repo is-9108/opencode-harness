@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { createEventBus, parseModel, runChild, type ChildEvent } from "../session.ts"
 import { createFakeApi, defaultResult } from "./fakes.ts"
+import { SECRET_DENY } from "../permissions.ts"
 
 const base = {
   parentID: "ses_parent",
@@ -27,7 +28,8 @@ test("子セッションを作って依頼を送り、idle を受けたらテキ
   assert.equal(result.status, "completed")
   assert.equal(result.status === "completed" && result.text, "done")
   assert.deepEqual(result.status === "completed" && result.tokens, defaultResult().tokens)
-  assert.deepEqual(calls[0], { op: "create", parentID: "ses_parent", title: base.title, directory: base.directory, permission })
+  // 工程が渡した権限の後に、秘密情報の拒否を必ず付ける（後のルールが優先されるため、広い許可でも上書きされない）
+  assert.deepEqual(calls[0], { op: "create", parentID: "ses_parent", title: base.title, directory: base.directory, permission: [...permission, ...SECRET_DENY] })
   assert.deepEqual(calls[1], {
     op: "promptAsync", sessionID: result.sessionID, directory: base.directory,
     agent: "dev-planner", model: { providerID: "openai", modelID: "gpt-6-luna" }, text: base.prompt,
@@ -36,6 +38,12 @@ test("子セッションを作って依頼を送り、idle を受けたらテキ
   assert.ok(done)
   assert.equal(done.sessionID, result.sessionID)
   assert.deepEqual(done.tokens, defaultResult().tokens)
+})
+
+test("工程が権限を渡さなくても、子セッションには秘密情報の拒否を渡す", async () => {
+  const { deps, calls } = setup()
+  await runChild(deps, base)
+  assert.deepEqual(calls[0]?.op === "create" && calls[0].permission, SECRET_DENY)
 })
 
 test("子セッションを作った直後（完了を待つ前）に、onSession で ID を知らせる", async () => {

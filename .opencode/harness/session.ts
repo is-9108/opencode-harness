@@ -6,6 +6,8 @@
 //   開始の猶予を過ぎても子セッションが応答を始めなければ、エラーにする
 // - 親のツールが中断されたら、子セッションにも abort を送る。完了した後に届いた abort は無視する（M0-2）
 // - エラーの再試行やモデルの切り替えはしない（上限の検知とフォールバックは M3）
+// - 子セッションの権限の最後に、.env や秘密鍵の読み書きの拒否を必ず付ける（計画 9 章）
+import { SECRET_DENY } from "./permissions.ts"
 
 export type ModelRef = { providerID: string; modelID: string }
 export type PermissionRule = { permission: string; pattern: string; action: "allow" | "deny" | "ask" }
@@ -108,7 +110,7 @@ export async function runChild(deps: RunChildDeps, opts: RunChildOptions): Promi
 
   const sessionID =
     opts.sessionID ??
-    (await api.create({ parentID: opts.parentID, title: opts.title, directory: opts.directory, permission: opts.permission })).id
+    (await api.create({ parentID: opts.parentID, title: opts.title, directory: opts.directory, permission: [...(opts.permission ?? []), ...SECRET_DENY] })).id
   opts.onSession?.(sessionID)
 
   const wait = events.waitForIdle(sessionID, opts.signal)
