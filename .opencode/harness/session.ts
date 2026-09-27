@@ -77,6 +77,9 @@ export type RunChildOptions = {
   permission?: PermissionRule[]
   // 指定すると、新しく作らずにこのセッションへ続きを送る
   sessionID?: string
+  // 子セッションの ID が決まった直後（完了を待つ前）に呼ばれる。工程はここで ID を保存し、
+  // 途中で opencode ごと落ちても、次は同じ子セッションで続きから進められるようにする
+  onSession?: (sessionID: string) => void
   signal?: AbortSignal
 }
 
@@ -106,6 +109,7 @@ export async function runChild(deps: RunChildDeps, opts: RunChildOptions): Promi
   const sessionID =
     opts.sessionID ??
     (await api.create({ parentID: opts.parentID, title: opts.title, directory: opts.directory, permission: opts.permission })).id
+  opts.onSession?.(sessionID)
 
   const wait = events.waitForIdle(sessionID, opts.signal)
   try {

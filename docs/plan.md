@@ -465,7 +465,7 @@ stateDiagram-v2
 | # | マイルストーン | 内容 | 完了条件 |
 |---|---|---|---|
 | M0 | スパイク ✅ | 1 章の 10 項目 | 完了（2026-09-26）。結果は `docs/spikes.md`、計画は v3.1 に反映した |
-| M1 | **/dev の一本道** | 状態の保存、worktree、スナップショット、plan、承認、test-writer、redVerify、テストのロック（権限と監査）、implementer、checks（JUnit の解析）、spec の観点のレビュー 1 つだけ、pr。ループとフォールバックはなし | サンプルリポジトリで、issue から PR まで 1 本通る |
+| M1 | **/dev の一本道** ✅ | 状態の保存、worktree、スナップショット、plan、承認、test-writer、redVerify、テストのロック（権限と監査）、implementer、checks（JUnit の解析）、spec の観点のレビュー 1 つだけ、pr。ループとフォールバックはなし | 完了（2026-09-27）。サンプルリポジトリで issue から PR まで 2 本通り、強制終了からの再開も確認した（`docs/e2e/m1.md`） |
 | M2 | ループと安全装置 | test-fix / review-fix のループ、指紋、揺り戻しの検知、予算（セッション数）、エスカレーション、`/fix`、免除リスト、spec_gap、テストの変更申請、ベースライン、flaky、依存 issue の確認、git の権限 | 評価シナリオの「直せない失敗」「仕様の曖昧さ」「不安定なテスト」が期待どおりに動く |
 | M3 | レビューと運用 | 多角的レビューと judge（根拠の必須化）、safetyGate（秘密情報、依存、issue の変更）、フォールバック、`waiting_quota`、`auth_required`、トークンとコストの予算、圧縮の設定の同期、ロック、HEAD の照合、自動継続、`/status` | 評価シナリオの「捻じ曲げの罠」「依存の追加」「上限の疑似発生」「強制終了」が期待どおりに動く |
 | M4 | 要件定義 | `/req`、interview、spec-writer、issue-planner、コードでの検証、publish、変更要求のモード | 要件定義から issue の登録まで通る |

@@ -38,6 +38,26 @@ test("子セッションを作って依頼を送り、idle を受けたらテキ
   assert.deepEqual(done.tokens, defaultResult().tokens)
 })
 
+test("子セッションを作った直後（完了を待つ前）に、onSession で ID を知らせる", async () => {
+  const seen: string[] = []
+  let settled = false
+  const { deps } = setup({
+    onPrompt: (_id, idle) => setTimeout(idle, 5),
+  })
+  const pending = runChild(deps, { ...base, onSession: (id) => seen.push(id) }).then((r) => ((settled = true), r))
+  await new Promise((r) => setTimeout(r, 1))
+  assert.equal(settled, false)
+  assert.deepEqual(seen, ["ses_fake_1"])
+  await pending
+})
+
+test("既存の子セッションに続きを送るときも、onSession でその ID を知らせる", async () => {
+  const seen: string[] = []
+  const { deps } = setup()
+  await runChild(deps, { ...base, sessionID: "ses_existing", onSession: (id) => seen.push(id) })
+  assert.deepEqual(seen, ["ses_existing"])
+})
+
 test("実行中に親のツールが中断されたら、子セッションにも abort を送り、中断として返す", async () => {
   const controller = new AbortController()
   const { deps, calls } = setup({ onPrompt: () => setTimeout(() => controller.abort(), 0) })

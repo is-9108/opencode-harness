@@ -56,6 +56,7 @@ const setup = (behaviors: Behave[]) => {
   const calls: Call[] = []
   const child = async (o: Call): Promise<ChildResult> => {
     calls.push(o)
+    o.onSession?.(o.sessionID ?? "ses_green_1")
     const behave = behaviors.shift()
     const status = behave ? behave(worktree, o) : "completed"
     const sessionID = o.sessionID ?? "ses_green_1"
@@ -121,6 +122,25 @@ test("green の途中で中断したら、次の advance で同じ子セッシ�
   assert.equal(first.kind, "error")
   assert.equal(store.get(runId)?.step, "green")
   assert.equal(store.get(runId)?.sessions?.green, "ses_green_1")
+
+  const second = await advance(deps, runId)
+  assert.equal(second.kind, "continue")
+  assert.equal(calls[1]?.sessionID, "ses_green_1")
+})
+
+test("green の子セッションの途中でプロセスごと落ちても、子セッションの ID は保存されていて、次は同じセッションで続きから進める", async () => {
+  const { deps, store, calls, runId } = setup([
+    () => {
+      throw new Error("opencode が強制終了された")
+    },
+    (wt, call) => {
+      assert.match(call.prompt, /続き/)
+      return finishAll(wt, call)
+    },
+  ])
+  await assert.rejects(advance(deps, runId), /強制終了/)
+  assert.equal(store.get(runId)?.sessions?.green, "ses_green_1")
+  assert.equal(store.get(runId)?.step, "green")
 
   const second = await advance(deps, runId)
   assert.equal(second.kind, "continue")
