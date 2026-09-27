@@ -8,6 +8,7 @@ import { recordPlan, runPlan, waitApproval } from "../steps/plan.ts"
 import { runRed } from "../steps/red.ts"
 import { runGreen } from "../steps/green.ts"
 import { runChecks } from "../steps/checks.ts"
+import { runReview } from "../steps/review.ts"
 import { auditAfterStep } from "../steps/audit.ts"
 
 export type StepDeps = {
@@ -55,6 +56,8 @@ async function runStep(deps: StepDeps, run: RunState): Promise<StepResult> {
       return runGreen(deps, run)
     case "checks":
       return runChecks(deps, run)
+    case "review":
+      return runReview(deps, run)
     default:
       return { kind: "error", message: `工程 ${run.step} はまだ実装されていません` }
   }
