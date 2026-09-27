@@ -26,6 +26,15 @@ export function createSessionApi(client: Client): SessionApi {
       await client.session.abort({ path: { id: sessionID }, query: { directory } })
     },
 
+    async poll({ sessionID, directory }) {
+      // 状態の一覧に載っていないセッションは idle（opencode は作業中のセッションだけを返す）
+      const statuses = unwrap(await client.session.status({ query: { directory } }), "状態を取得できませんでした")
+      const status = statuses[sessionID]?.type ?? "idle"
+      const messages = unwrap(await client.session.messages({ path: { id: sessionID }, query: { directory } }), "メッセージを取得できませんでした")
+      const last = messages.at(-1)?.info
+      return { status, lastAssistantCompleted: last?.role === "assistant" && last.time.completed !== undefined }
+    },
+
     async lastAssistant({ sessionID, directory }) {
       const res = await client.session.messages({ path: { id: sessionID }, query: { directory } })
       const messages = unwrap(res, "メッセージを取得できませんでした")

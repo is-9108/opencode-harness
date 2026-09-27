@@ -56,7 +56,9 @@ const setup = (issue: GhIssue | undefined, number = 12) => {
   const store = createStore(root)
   startRun(store, { kind: "dev", issue: number })
   const { exec, calls } = fakeExec(issue)
-  const deps = { root, config: config(), store, exec }
+  // setup の工程では子セッションを使わない
+  const child = async (): Promise<never> => { throw new Error("setup で子セッションは呼ばれないはず") }
+  const deps = { root, config: config(), store, exec, child }
   const worktree = join(dirname(root), `${basename(root)}.worktrees`, `issue-${number}`)
   return { root, store, deps, calls, worktree, runId: `issue-${number}` }
 }

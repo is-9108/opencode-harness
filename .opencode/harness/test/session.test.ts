@@ -16,7 +16,7 @@ const setup = (opts: Parameters<typeof createFakeApi>[1] = {}) => {
   const events = createEventBus()
   const { api, calls } = createFakeApi(events, opts)
   const logged: ChildEvent[] = []
-  return { deps: { api, events, log: (e: ChildEvent) => logged.push(e) }, calls, logged, events }
+  return { deps: { api, events, log: (e: ChildEvent) => logged.push(e), pollMs: 2, startGraceMs: 20 }, calls, logged, events }
 }
 
 test("子セッションを作って依頼を送り、idle を受けたらテキストとトークンを返して記録する", async () => {
@@ -113,4 +113,28 @@ test("モデルの指定は provider/model の形式を分解する。形式が�
   const { deps, calls } = setup()
   await assert.rejects(runChild(deps, { ...base, model: "gpt-5.5" }), /provider\/model/)
   assert.equal(calls.length, 0)
+})
+
+test("完了のイベントが届かなくても（worktree の子セッションは別のインスタンスで動く）、状態の確認で完了を検知する", async () => {
+  const { deps } = setup({ onPrompt: () => {}, poll: () => ({ status: "idle", lastAssistantCompleted: true }) })
+  const result = await runChild(deps, base)
+  assert.equal(result.status, "completed")
+})
+
+test("作業中（busy / retry）の間は完了にしない", async () => {
+  const { deps } = setup({
+    onPrompt: () => {},
+    poll: (_id, n) => (n <= 3 ? { status: n === 2 ? "retry" : "busy", lastAssistantCompleted: false } : { status: "idle", lastAssistantCompleted: true }),
+  })
+  const result = await runChild(deps, base)
+  assert.equal(result.status, "completed")
+})
+
+test("依頼が後から失敗して子セッションが始まらなければ、開始の猶予を過ぎた時点でエラーにする", async () => {
+  const { deps, logged } = setup({ onPrompt: () => {}, poll: () => ({ status: "idle", lastAssistantCompleted: false }) })
+  const result = await runChild(deps, { ...base, agent: "no-such-agent" })
+  assert.equal(result.status, "error")
+  assert.match(result.status === "error" ? result.error : "", /始まりません/)
+  assert.match(result.status === "error" ? result.error : "", /no-such-agent/)
+  assert.ok(logged.some((e) => e.type === "child.error"))
 })

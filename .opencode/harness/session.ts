@@ -1,5 +1,9 @@
 // 工程の作業を、独立した子セッションで実行する（計画 4 章「子セッションの実行方法」）
-// - 依頼は prompt_async で送り、完了は session.idle のイベントで受け取る（応答を待つ HTTP は 5 分で切れる。M0-2）
+// - 依頼は prompt_async で送る（応答を待つ HTTP は 5 分で切れる。M0-2）
+// - 完了は session.idle のイベントと、状態の定期的な確認（poll）の早いほうで判定する。
+//   worktree の子セッションは opencode の別のインスタンスで動き、そのイベントはこのプラグインに届かないため（#10 で判明）
+// - prompt_async は受け付けた時点で成功を返し、失敗（エージェントが見つからないなど）は後から起きる。
+//   開始の猶予を過ぎても子セッションが応答を始めなければ、エラーにする
 // - 親のツールが中断されたら、子セッションにも abort を送る。完了した後に届いた abort は無視する（M0-2）
 // - エラーの再試行やモデルの切り替えはしない（上限の検知とフォールバックは M3）
 
@@ -22,7 +26,11 @@ export interface SessionApi {
   promptAsync(input: { sessionID: string; directory: string; agent: string; model: ModelRef; text: string }): Promise<void>
   abort(input: { sessionID: string; directory: string }): Promise<void>
   lastAssistant(input: { sessionID: string; directory: string }): Promise<AssistantResult | undefined>
+  // 子セッションの状態と、最後のアシスタントのメッセージが完了しているか
+  poll(input: { sessionID: string; directory: string }): Promise<PollResult>
 }
+
+export type PollResult = { status: "idle" | "busy" | "retry"; lastAssistantCompleted: boolean }
 
 export type BusEvent = { type: string; properties?: Record<string, unknown> }
 
@@ -55,6 +63,8 @@ export type RunChildDeps = {
   log: (event: ChildEvent) => void
   progress?: (message: string) => void
   now?: () => number
+  pollMs?: number
+  startGraceMs?: number
 }
 
 export type RunChildOptions = {
@@ -71,6 +81,8 @@ export type RunChildOptions = {
 }
 
 const PROGRESS_INTERVAL_MS = 15_000
+const POLL_MS = 5_000
+const START_GRACE_MS = 60_000
 
 export function parseModel(ref: string): ModelRef {
   const i = ref.indexOf("/")
@@ -111,7 +123,13 @@ export async function runChild(deps: RunChildDeps, opts: RunChildOptions): Promi
     PROGRESS_INTERVAL_MS,
   )
   timer.unref?.()
-  const outcome = await wait.promise.finally(() => clearInterval(timer))
+  const polling = { stopped: false }
+  const polled = pollUntilDone(deps, { sessionID, directory: opts.directory, started }, polling)
+  const outcome = await Promise.race([wait.promise, polled]).finally(() => {
+    clearInterval(timer)
+    polling.stopped = true
+    wait.cancel()
+  })
 
   if (outcome === "aborted") {
     await api.abort({ sessionID, directory: opts.directory }).catch(() => {})
@@ -120,6 +138,11 @@ export async function runChild(deps: RunChildDeps, opts: RunChildOptions): Promi
   }
 
   const last = await api.lastAssistant({ sessionID, directory: opts.directory })
+  if (outcome === "not_started" && !last?.error) {
+    const error = `子セッションが始まりませんでした（${Math.round((deps.startGraceMs ?? START_GRACE_MS) / 1000)} 秒以内に応答がありません）。エージェント「${opts.agent}」が作業ディレクトリ ${opts.directory} の .opencode/agents にあるか、モデル ${opts.model} が使えるかを確認してください`
+    record("child.error", { sessionID, error })
+    return { status: "error", sessionID, error }
+  }
   if (!last || last.error) {
     const error = last?.error ? `${last.error.name}: ${last.error.message}` : "子セッションの応答がありません"
     record("child.error", { sessionID, error, tokens: last?.tokens, cost: last?.cost })
@@ -128,6 +151,29 @@ export async function runChild(deps: RunChildDeps, opts: RunChildOptions): Promi
   const usedModel = `${last.providerID}/${last.modelID}`
   record("child.completed", { sessionID, tokens: last.tokens, cost: last.cost, model: usedModel })
   return { status: "completed", sessionID, text: last.text, tokens: last.tokens, cost: last.cost, model: usedModel }
+}
+
+// 状態を定期的に確かめ、完了（idle かつ最後のアシスタントのメッセージが完了）か、開始しなかったかを返す
+async function pollUntilDone(
+  deps: RunChildDeps,
+  target: { sessionID: string; directory: string; started: number },
+  polling: { stopped: boolean },
+): Promise<"idle" | "not_started"> {
+  const now = deps.now ?? Date.now
+  const pollMs = deps.pollMs ?? POLL_MS
+  const grace = deps.startGraceMs ?? START_GRACE_MS
+  for (;;) {
+    await new Promise((r) => setTimeout(r, pollMs))
+    if (polling.stopped) return new Promise(() => {}) // もう一方で決着済み。この Promise は使われない
+    try {
+      const { status, lastAssistantCompleted } = await deps.api.poll({ sessionID: target.sessionID, directory: target.directory })
+      if (status !== "idle") continue
+      if (lastAssistantCompleted) return "idle"
+      if (now() - target.started > grace) return "not_started"
+    } catch {
+      // 一時的な失敗は次の確認で取り返す
+    }
+  }
 }
 
 export function createEventBus(): EventBus {
