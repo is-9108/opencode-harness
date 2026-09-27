@@ -1,7 +1,16 @@
 // harness_status ツールが返す文章を組み立てる
 import { CONFIG_FILE, type LoadResult } from "./config.ts"
+import type { RunList, RunStatus } from "./state.ts"
 
-export function formatStatus(load: LoadResult): string {
+const STATUS_LABEL: Record<RunStatus, string> = {
+  in_progress: "進行中",
+  need_user: "ユーザーの対応待ち",
+  escalated: "エスカレーション",
+  interrupted: "中断",
+  done: "完了",
+}
+
+export function formatStatus(load: LoadResult, list: RunList = { runs: [], broken: [] }): string {
   switch (load.status) {
     case "missing":
       return [
@@ -12,8 +21,19 @@ export function formatStatus(load: LoadResult): string {
       return [`設定ファイルに誤りがあります（${load.path}）:`, ...load.errors.map((e) => `- ${e}`)].join("\n")
     case "ok":
       return [
-        "run はありません。",
+        ...formatRuns(list),
         ...(load.warnings.length > 0 ? ["", "設定の警告:", ...load.warnings.map((w) => `- ${w}`)] : []),
       ].join("\n")
   }
+}
+
+function formatRuns({ runs, broken }: RunList): string[] {
+  const lines: string[] = []
+  if (runs.length === 0) lines.push("run はありません。")
+  else {
+    lines.push("| run | 種類 | 状態 | 工程 | 更新 |", "|---|---|---|---|---|")
+    for (const r of runs) lines.push(`| ${r.id} | ${r.kind} | ${STATUS_LABEL[r.status]} | ${r.step} | ${r.updatedAt} |`)
+  }
+  if (broken.length > 0) lines.push("", "読み込めない run:", ...broken.map((b) => `- ${b.id}: ${b.error}`))
+  return lines
 }
