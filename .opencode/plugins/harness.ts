@@ -9,9 +9,10 @@ import { createEventBus, runChild, type PermissionRule } from "../harness/sessio
 import { createSessionApi } from "../harness/sdk-adapter.ts"
 import { advance, record, type StepDeps } from "../harness/machine/dev.ts"
 import { realExec, realShell } from "../harness/exec.ts"
+import { guardHarnessTool } from "../harness/permissions.ts"
 
 type Ctx = { worktree: string; directory: string }
-type ToolCtx = Ctx & { sessionID: string; abort: AbortSignal; metadata(input: { title?: string }): void }
+type ToolCtx = Ctx & { sessionID: string; agent: string; abort: AbortSignal; metadata(input: { title?: string }): void }
 const rootOf = (context: Ctx) => context.worktree || context.directory
 
 export const HarnessPlugin: Plugin = async ({ client }) => {
@@ -56,6 +57,8 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
         arg: tool.schema.number().int().positive().describe("dev のときは issue 番号"),
       },
       async execute(args, context) {
+        const denied = guardHarnessTool(context.agent)
+        if (denied) return denied
         const root = rootOf(context)
         const load = loadConfig(root)
         if (load.status !== "ok") return formatStatus(load)
@@ -70,6 +73,8 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
         run: tool.schema.string().describe("run の ID（例: issue-12）"),
       },
       async execute(args, context) {
+        const denied = guardHarnessTool(context.agent)
+        if (denied) return denied
         const deps = stepDeps(context)
         if (typeof deps === "string") return deps
         const result = await advance(deps, args.run)
@@ -86,6 +91,8 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
         feedback: tool.schema.string().optional().describe("修正指示の内容（changes_requested のときは必須）"),
       },
       async execute(args, context) {
+        const denied = guardHarnessTool(context.agent)
+        if (denied) return denied
         const deps = stepDeps(context)
         if (typeof deps === "string") return deps
         const result = record(deps, args)
