@@ -14,6 +14,10 @@ export type RunState = {
   step: string
   createdAt: string
   updatedAt: string
+  // setup の工程で決まる
+  title?: string
+  worktree?: string
+  branch?: string
 }
 
 export type RunList = { runs: RunState[]; broken: { id: string; error: string }[] }
