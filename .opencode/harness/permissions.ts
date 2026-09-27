@@ -1,9 +1,9 @@
 // エージェントをまたいで共通の権限と、ハーネスのツールを使えるエージェントの制限（計画 9 章）
 import type { PermissionRule } from "./session.ts"
 
-// ハーネスのツール（harness_*）を使えるエージェント。司令塔だけに限る（M2 で harness-fix を加える）。
+// ハーネスのツール（harness_*）を使えるエージェント。司令塔（/dev の harness と /fix の harness-fix）だけに限る。
 // harness_status も制限する（ループの残り回数や予算を、作業用のエージェントに知らせないため）
-export const HARNESS_AGENTS = ["harness"]
+export const HARNESS_AGENTS = ["harness", "harness-fix"]
 
 // ハーネスのツールを呼んだエージェントを確かめる。使えないエージェントなら、その理由の文章を返す。
 // ツールは全エージェントに見えるため（docs/omo-evaluation.md）、設定ではなくコードで拒否する

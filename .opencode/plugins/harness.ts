@@ -10,6 +10,8 @@ import { createSessionApi } from "../harness/sdk-adapter.ts"
 import { advance, record, type RecordInput, type StepDeps } from "../harness/machine/dev.ts"
 import { waive } from "../harness/steps/waiver.ts"
 import { childSessionsUsed } from "../harness/steps/budget.ts"
+import { startFix } from "../harness/steps/fix.ts"
+import { FIX_AGENT, editedPaths, fixEditDenial, isAllowedFixCommand } from "../harness/fix-guard.ts"
 import { realExec, realShell } from "../harness/exec.ts"
 import { filterGrepOutput, guardHarnessTool } from "../harness/permissions.ts"
 
@@ -17,9 +19,16 @@ type Ctx = { worktree: string; directory: string }
 type ToolCtx = Ctx & { sessionID: string; agent: string; abort: AbortSignal; metadata(input: { title?: string }): void }
 const rootOf = (context: Ctx) => context.worktree || context.directory
 
-export const HarnessPlugin: Plugin = async ({ client }) => {
+export const HarnessPlugin: Plugin = async ({ client, directory, worktree }) => {
   const events = createEventBus()
   const api = createSessionApi(client)
+  // セッションごとのエージェント（harness-fix の編集とコマンドを、フックで制限するため。#41）
+  const sessionAgents = new Map<string, string>()
+  const pluginRoot = worktree || directory
+  const fixConfig = () => {
+    const load = loadConfig(pluginRoot)
+    return load.status === "ok" ? load.config : undefined
+  }
 
   // 工程の実行に必要な依存を組み立てる。設定に問題があれば、その説明の文章を返す
   const stepDeps = (context: ToolCtx): StepDeps | string => {
@@ -56,9 +65,9 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
     }),
     harness_start: tool({
       description:
-        "ハーネスの run を開始する。kind が dev のときは、GitHub の issue 番号を arg に渡す。同じ issue の run がすでにあれば、新しく作らずに既存の run を返す。",
+        "ハーネスの run を開始する。kind が dev のときは、GitHub の issue 番号を arg に渡す。同じ issue の run がすでにあれば、新しく作らずに既存の run を返す。kind が fix のとき（/fix）は、エスカレーションした issue の run について、報告の要約と方針の選択肢を返す。",
       args: {
-        kind: tool.schema.enum(["dev"]).describe("run の種類。現在は dev（issue の開発）のみ"),
+        kind: tool.schema.enum(["dev", "fix"]).describe("dev: issue の開発を始める・続ける。fix: エスカレーションした run を直す（/fix）"),
         arg: tool.schema.number().int().positive().describe("dev のときは issue 番号"),
       },
       async execute(args, context) {
@@ -67,6 +76,12 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
         const root = rootOf(context)
         const load = loadConfig(root)
         if (load.status !== "ok") return formatStatus(load)
+        if (args.kind === "fix") {
+          const deps = stepDeps(context)
+          if (typeof deps === "string") return deps
+          const result = startFix(deps, args.arg)
+          return `結果: ${result.kind}\n${result.message}`
+        }
         const { run, created } = startRun(createStore(root), { kind: args.kind, issue: args.arg })
         return `${created ? "run を作成しました" : "既存の run を使います"}: ${run.id}（工程: ${run.step}）`
       },
@@ -164,6 +179,24 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
 
   return {
     tool: tools,
+    "chat.message": async (input) => {
+      if (input.agent) sessionAgents.set(input.sessionID, input.agent)
+    },
+    // harness-fix は、テストファイル・ハーネスの成果物・秘密情報を編集できない（エージェント定義に静的に書けないため、ここで拒否する）
+    "tool.execute.before": async (input, output) => {
+      if (sessionAgents.get(input.sessionID) !== FIX_AGENT || editedPaths(input.tool, output.args).length === 0) return
+      const config = fixConfig()
+      if (!config) throw new Error("harness.config.json を読み込めないため、harness-fix の編集を止めました")
+      const denied = fixEditDenial(config, input.tool, output.args)
+      if (denied) throw new Error(denied)
+    },
+    // harness-fix が checks のコマンドを実行するときは、確認なしで許可する（それ以外のコマンドは確認する）
+    "permission.ask": async (input, output) => {
+      if (sessionAgents.get(input.sessionID) !== FIX_AGENT || input.type !== "bash") return
+      const config = fixConfig()
+      const command = typeof input.metadata?.command === "string" ? input.metadata.command : Array.isArray(input.pattern) ? input.pattern.join(" ") : (input.pattern ?? "")
+      if (config && isAllowedFixCommand(config, command)) output.status = "allow"
+    },
     // grep の結果から .env などの秘密情報の行を取り除く（read の拒否だけでは grep で読めてしまうため）
     "tool.execute.after": async (input, output) => {
       if (input.tool === "grep" && typeof output.output === "string") output.output = filterGrepOutput(output.output)

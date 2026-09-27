@@ -77,13 +77,26 @@ test("作業用のエージェントは、webfetch・websearch と、.env や秘
 })
 
 test("ハーネスのツールは、司令塔（harness）からだけ使える（AC-4）", () => {
-  assert.deepEqual(HARNESS_AGENTS, ["harness"])
+  assert.deepEqual(HARNESS_AGENTS, ["harness", "harness-fix"])
   assert.equal(guardHarnessTool("harness"), undefined)
+  assert.equal(guardHarnessTool("harness-fix"), undefined)
   for (const agent of ["build", "plan", "general", "implementer", "Sisyphus - ultraworker"]) {
     const message = guardHarnessTool(agent)
     assert.ok(message, agent)
     assert.match(message, /harness/)
   }
+})
+
+test("harness-fix は、git の書き込みと依存の追加を拒否され、読み取りは許可される。ほかのコマンドは確認する（#41）", () => {
+  const rules = agentRules("harness-fix")
+  for (const cmd of ["git commit -m x", "git push origin HEAD", "git reset --hard HEAD~1", "git checkout main", "git -C ../wt commit -m y", "npm install lodash", "pnpm add x"])
+    assert.equal(evaluate(rules, "bash", cmd), "deny", cmd)
+  for (const cmd of ["git status", "git diff main...HEAD", "git -C ../repo.worktrees/issue-7 diff main...HEAD"]) assert.equal(evaluate(rules, "bash", cmd), "allow", cmd)
+  assert.equal(evaluate(rules, "bash", "rm -rf src"), "ask")
+  assert.equal(evaluate(rules, "edit", "/work/repo.worktrees/issue-7/src/slug.ts"), "allow")
+  for (const file of ["/work/repo/.env", "certs/server.key"]) assert.equal(evaluate(rules, "read", file), "deny", file)
+  assert.equal(evaluate(rules, "webfetch", "https://example.com"), "deny")
+  assert.equal(evaluate(rules, "question", "*"), "allow")
 })
 
 // grep ツールの出力（opencode 1.18 の tool/grep.ts の形式）

@@ -16,6 +16,7 @@ import { recordSpecGap, runSpecGap } from "../steps/spec-gap.ts"
 import { runPr } from "../steps/pr.ts"
 import { auditAfterStep } from "../steps/audit.ts"
 import { fixGuide } from "../steps/escalation.ts"
+import { fixRecordPath, resumeFromFix } from "../steps/fix.ts"
 import { BudgetExceeded, budgetedChild, budgetWarning, escalateBudget } from "../steps/budget.ts"
 
 export type StepDeps = {
@@ -57,9 +58,13 @@ export async function advance(deps: StepDeps, runId: string): Promise<StepResult
     // テストの変更申請への判断を待っていれば、/fix ではなく判断を求める（#36）
     const pending = pendingDecision(run)
     if (pending) return pending
+    // /fix で修正の記録（fix-<e>.md）ができていれば、commit して checks から再開する（#41）
+    const resumed = await resumeFromFix(deps, run)
+    if (resumed) return resumed
     const last = run.lastEscalation
     const detail = last ? `（${last.reason}）。報告: ${last.report}` : ""
-    return { kind: "escalated", message: `${runId} はエスカレーションされています（工程: ${run.step}）${detail}\n${fixGuide(run)}` }
+    const record = last && run.worktree ? `\n直し終えたら、修正の記録 ${fixRecordPath(run.worktree, last.number)} を status: done で書いてから harness_advance を呼ぶと再開します。` : ""
+    return { kind: "escalated", message: `${runId} はエスカレーションされています（工程: ${run.step}）${detail}\n${fixGuide(run)}${record}` }
   }
   // 新しい子セッションは、予算（数の上限）の範囲でだけ作る（#40）
   const guarded: StepDeps = { ...deps, child: budgetedChild(deps) }
