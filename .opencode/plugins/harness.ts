@@ -9,6 +9,7 @@ import { createEventBus, runChild, type PermissionRule } from "../harness/sessio
 import { createSessionApi } from "../harness/sdk-adapter.ts"
 import { advance, record, type RecordInput, type StepDeps } from "../harness/machine/dev.ts"
 import { waive } from "../harness/steps/waiver.ts"
+import { childSessionsUsed } from "../harness/steps/budget.ts"
 import { realExec, realShell } from "../harness/exec.ts"
 import { filterGrepOutput, guardHarnessTool } from "../harness/permissions.ts"
 
@@ -49,7 +50,8 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
         const denied = guardHarnessTool(context.agent)
         if (denied) return denied
         const root = rootOf(context)
-        return formatStatus(loadConfig(root), createStore(root).list())
+        const store = createStore(root)
+        return formatStatus(loadConfig(root), store.list(), (id) => childSessionsUsed(store, id))
       },
     }),
     harness_start: tool({
