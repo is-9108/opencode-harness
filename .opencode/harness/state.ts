@@ -25,6 +25,8 @@ export type RunState = {
   feedbackCount?: number
   // red の検証に合格したときの commit（テストのロックと、後の差分の基準）
   redCommit?: string
+  // green の完了時の commit
+  greenCommit?: string
 }
 
 export type RunList = { runs: RunState[]; broken: { id: string; error: string }[] }
