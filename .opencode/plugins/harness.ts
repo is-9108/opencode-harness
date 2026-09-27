@@ -7,6 +7,8 @@ import { formatStatus } from "../harness/status.ts"
 import { createStore, startRun } from "../harness/state.ts"
 import { createEventBus, runChild, type PermissionRule } from "../harness/session.ts"
 import { createSessionApi } from "../harness/sdk-adapter.ts"
+import { advance } from "../harness/machine/dev.ts"
+import { realExec } from "../harness/exec.ts"
 
 type Ctx = { worktree: string; directory: string }
 const rootOf = (context: Ctx) => context.worktree || context.directory
@@ -38,6 +40,20 @@ export const HarnessPlugin: Plugin = async ({ client }) => {
         if (load.status !== "ok") return formatStatus(load)
         const { run, created } = startRun(createStore(root), { kind: args.kind, issue: args.arg })
         return `${created ? "run を作成しました" : "既存の run を使います"}: ${run.id}（工程: ${run.step}）`
+      },
+    }),
+    harness_advance: tool({
+      description:
+        "ハーネスの run を 1 工程だけ進める。戻り値の 1 行目が「結果: continue」ならもう一度呼ぶ。need_user ならユーザーと対話する。escalated / done / error なら止まって内容をユーザーに伝える。工程を自分で飛ばしたり、判断で進めたりしないこと。",
+      args: {
+        run: tool.schema.string().describe("run の ID（例: issue-12）"),
+      },
+      async execute(args, context) {
+        const root = rootOf(context)
+        const load = loadConfig(root)
+        if (load.status !== "ok") return formatStatus(load)
+        const result = await advance({ root, config: load.config, store: createStore(root), exec: realExec }, args.run)
+        return `結果: ${result.kind}\n${result.message}`
       },
     }),
   }
