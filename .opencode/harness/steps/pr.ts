@@ -115,10 +115,15 @@ async function countDiffLines(deps: StepDeps, worktree: string, base: string): P
 // events.jsonl の子セッションの記録を集計する（トークン数は LLM ではなくハーネスが数える）
 function harnessRecord(deps: StepDeps, run: RunState, diffLines: number): string {
   const path = join(deps.root, ".harness", "runs", run.id, "events.jsonl")
-  const children = (existsSync(path) ? readFileSync(path, "utf8").split(/\r?\n/) : [])
-    .filter(Boolean)
-    .map((l) => JSON.parse(l) as { type: string; title?: string; agent?: string; model?: string; durationMs?: number; tokens?: { total?: number } })
-    .filter((e) => e.type === "child.completed")
+  type Event = { type: string; title?: string; agent?: string; model?: string; durationMs?: number; tokens?: { total?: number }; excused?: string[]; resolved?: string[] }
+  const events = (existsSync(path) ? readFileSync(path, "utf8").split(/\r?\n/) : []).filter(Boolean).map((l) => JSON.parse(l) as Event)
+  const children = events.filter((e) => e.type === "child.completed")
+  // 最後の checks での、ベースラインの失敗の扱い（#32）
+  const lastChecks = events.filter((e) => e.type === "checks.completed").at(-1)
+  const baselineLines = [
+    ...(lastChecks?.excused?.length ? ["", "ベースラインの失敗として除外したもの（変更前から失敗していた）:", ...lastChecks.excused.map((e) => `- ${e}`)] : []),
+    ...(lastChecks?.resolved?.length ? ["", "ベースラインの失敗が解消したもの:", ...lastChecks.resolved.map((r) => `- ${r}`)] : []),
+  ]
   const n = (v: number) => v.toLocaleString("en-US")
   const total = children.reduce((s, e) => s + (e.tokens?.total ?? 0), 0)
   return [
@@ -130,6 +135,7 @@ function harnessRecord(deps: StepDeps, run: RunState, diffLines: number): string
     "",
     `- トークンの合計: ${n(total)}`,
     `- checks: ${run.checksRuns ?? 0} 回、review: ${run.reviewRounds ?? 0} 回、差分: ${diffLines} 行`,
+    ...baselineLines,
     "",
     "🤖 opencode ハーネスで作成",
   ].join("\n")

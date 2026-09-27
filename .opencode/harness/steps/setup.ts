@@ -1,10 +1,11 @@
-// setup の工程: issue を取得して保存し、issue 専用の worktree とブランチを用意し、依存をインストールする（計画 5 章、8.2）
+// setup の工程: issue を取得して保存し、issue 専用の worktree とブランチを用意し、依存をインストールして、ベースラインを取る（計画 5 章、8.2）
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs"
 import { basename, join, resolve } from "node:path"
 import type { RecordInput, StepDeps, StepResult } from "../machine/dev.ts"
 import { runIdFor, type RunState } from "../state.ts"
 import { baseBranchOf } from "./common.ts"
+import { readBaseline, recordBaseline } from "./baseline.ts"
 
 const SLUG_MAX = 40
 
@@ -50,10 +51,19 @@ export async function runSetup(deps: StepDeps, run: RunState): Promise<StepResul
     }
   }
 
-  // 5. issue のスナップショット。成果物のディレクトリは、それ自体の .gitignore で git の管理から外す
+  // 5. 成果物のディレクトリは、それ自体の .gitignore で git の管理から外す
   const runDir = join(worktree, ".harness", "run")
   mkdirSync(runDir, { recursive: true })
   writeFileSync(join(worktree, ".harness", ".gitignore"), "*\n")
+
+  // 6. ベースライン: 変更を加える前の checks の結果（#32）。再開のときは、変更後の結果を取らないように取り直さない
+  if (!readBaseline(worktree)) {
+    const baseline = await recordBaseline(deps, worktree)
+    const failing = baseline.checks.filter((c) => !c.passed).map((c) => c.name)
+    store.appendEvent(run.id, { type: "baseline.recorded", failing })
+  }
+
+  // 7. issue のスナップショット
   writeFileSync(join(runDir, "00-issue.md"), renderSnapshot(issue, deps.now?.() ?? new Date()))
 
   store.save({ ...run, step: "plan", title: issue.title, worktree, branch, pendingDependencies: undefined, stackCandidate: undefined })

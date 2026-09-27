@@ -9,7 +9,7 @@ import { advance } from "../machine/dev.ts"
 import { slugify } from "../steps/setup.ts"
 import { createStore, startRun } from "../state.ts"
 import { validateConfig } from "../config.ts"
-import { noShell } from "./fakes.ts"
+import { okShell } from "./fakes.ts"
 import { realExec, type Exec } from "../exec.ts"
 
 const git = (cwd: string, ...args: string[]) =>
@@ -66,7 +66,7 @@ const setup = (issue: GhIssue | undefined, number = 12, opts: { install?: string
   }
   const base = config()
   const cfg = opts.install ? { ...base, setup: { ...base.setup, install: opts.install } } : base
-  const deps = { root, config: cfg, store, exec, shell: opts.install ? shell : noShell, child }
+  const deps = { root, config: cfg, store, exec, shell: opts.install ? shell : okShell(shellCalls), child }
   const worktree = join(dirname(root), `${basename(root)}.worktrees`, `issue-${number}`)
   return { root, store, deps, calls, shellCalls, worktree, runId: `issue-${number}` }
 }
@@ -167,7 +167,8 @@ test("setup.install が設定されていれば、worktree の中で依存をイ
   const { deps, shellCalls, worktree, runId } = setup(openIssue, 12, { install: "npm ci" })
   const result = await advance(deps, runId)
   assert.equal(result.kind, "continue")
-  assert.deepEqual(shellCalls, [{ command: "npm ci", cwd: worktree }])
+  // インストールの後に、ベースラインとして checks を実行する
+  assert.deepEqual(shellCalls, [{ command: "npm ci", cwd: worktree }, { command: "npm test", cwd: worktree }])
 })
 
 test("依存のインストールに失敗したら、出力の末尾を添えてエラーを返し、工程は setup のままにする", async () => {
@@ -177,4 +178,15 @@ test("依存のインストールに失敗したら、出力の末尾を添え�
   assert.match(result.message, /npm ci/)
   assert.match(result.message, /missing lockfile/)
   assert.equal(store.get(runId)?.step, "setup")
+})
+
+test("setup で、変更を加える前の worktree の checks をベースラインとして記録し、再開しても取り直さない", async () => {
+  const { store, deps, shellCalls, worktree, runId } = setup(openIssue)
+  assert.equal((await advance(deps, runId)).kind, "continue")
+  assert.deepEqual(shellCalls, [{ command: "npm test", cwd: worktree }])
+  assert.ok(existsSync(join(worktree, ".harness", "run", "00-baseline.md")))
+
+  store.save({ ...store.get(runId)!, step: "setup" })
+  await advance(deps, runId)
+  assert.equal(shellCalls.length, 1)
 })

@@ -8,7 +8,7 @@ import { advance, record } from "../machine/dev.ts"
 import { parseDependencies } from "../steps/setup.ts"
 import { createStore, startRun } from "../state.ts"
 import { validateConfig } from "../config.ts"
-import { noShell } from "./fakes.ts"
+import { okShell } from "./fakes.ts"
 import { realExec, type Exec } from "../exec.ts"
 
 const git = (cwd: string, ...args: string[]) =>
@@ -49,7 +49,7 @@ const setup = (opts: { deps: string; issues?: Issue[]; prs?: Pr[] }) => {
   const { config } = validateConfig({ models: {}, checks: [{ name: "test", command: "npm test" }], tests: { globs: ["**/*.test.ts"] } })
   assert.ok(config)
   const child = async (): Promise<never> => { throw new Error("setup で子セッションは呼ばれないはず") }
-  const deps = { root, config, store, exec, shell: noShell, child }
+  const deps = { root, config, store, exec, shell: okShell(), child }
   const worktree = join(dirname(root), `${basename(root)}.worktrees`, "issue-12")
   return { root, store, deps, calls, worktree, runId: "issue-12", issues }
 }

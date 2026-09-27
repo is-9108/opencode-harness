@@ -56,3 +56,10 @@ export const defaultResult = (): AssistantResult => ({
 export const noShell = async (): Promise<never> => {
   throw new Error("この工程ではシェルのコマンドは呼ばれないはず")
 }
+
+// どのコマンドも成功で返す偽のシェル（setup のベースラインで checks を実行するため）。呼ばれたコマンドを記録する
+export const okShell = (calls: { command: string; cwd: string }[] = []) =>
+  async (command: string, o: { cwd: string }) => {
+    calls.push({ command, cwd: o.cwd })
+    return { code: 0, stdout: "", stderr: "", timedOut: false, durationMs: 1 }
+  }
