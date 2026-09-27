@@ -11,6 +11,7 @@ import { runChecks } from "../steps/checks.ts"
 import { runReview } from "../steps/review.ts"
 import { runPr } from "../steps/pr.ts"
 import { auditAfterStep } from "../steps/audit.ts"
+import { fixGuide } from "../steps/escalation.ts"
 
 export type StepDeps = {
   root: string
@@ -43,7 +44,11 @@ export async function advance(deps: StepDeps, runId: string): Promise<StepResult
   if (!run) return { kind: "error", message: `run ${runId} がありません。harness_start で作成してください` }
   if (run.status === "done") return { kind: "done", message: `${runId} は完了しています${run.prUrl ? `（PR: ${run.prUrl}）` : ""}` }
   if (run.status === "interrupted") return { kind: "error", message: `${runId} は中断されています` }
-  if (run.status === "escalated") return { kind: "escalated", message: `${runId} はエスカレーションされています（工程: ${run.step}）。/fix で対応してください` }
+  if (run.status === "escalated") {
+    const last = run.lastEscalation
+    const detail = last ? `（${last.reason}）。報告: ${last.report}` : ""
+    return { kind: "escalated", message: `${runId} はエスカレーションされています（工程: ${run.step}）${detail}\n${fixGuide(run)}` }
+  }
   const result = await runStep(deps, run)
   // テストがロックされた後の工程では、工程が終わるたびにテストファイルを監査する（#12）
   return run.redCommit && AUDITED_STEPS.has(run.step) ? auditAfterStep(deps, run, result) : result

@@ -156,6 +156,8 @@ test("根拠のある blocking の指摘があれば、M1 では escalated に�
   assert.match(summary, /blocking_count: 1/)
   assert.match(summary, /F-02.*根拠/)
   assert.equal(store.get(runId)?.status, "escalated")
+  // エスカレーションの報告に、未解決の論点として指摘を載せる（#33）
+  assert.match(readFileSync(store.get(runId)?.lastEscalation?.report ?? "", "utf8"), /## 未解決の論点[\s\S]*F-01/)
   assert.equal(store.get(runId)?.step, "review")
 })
 

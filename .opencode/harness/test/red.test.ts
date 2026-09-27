@@ -153,6 +153,7 @@ test("差し戻しを 2 回しても不合格なら、エスカレーション�
   assert.equal(childCalls.length, 3)
   const run = store.get(runId)
   assert.equal(run?.status, "escalated")
+  assert.equal(run?.lastEscalation?.reason, "loop_exhausted")
   assert.equal(run?.step, "red")
   assert.match(readFileSync(join(worktree, ".harness", "run", "02-red.md"), "utf8"), /Cannot find module/)
 })

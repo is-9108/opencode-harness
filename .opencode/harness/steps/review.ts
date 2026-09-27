@@ -6,6 +6,7 @@ import { readFrontmatter } from "../artifacts.ts"
 import type { StepDeps, StepResult } from "../machine/dev.ts"
 import type { RunState } from "../state.ts"
 import { baseBranchOf, baseChildPermissions, editOnly, readTemplate, runDir } from "./common.ts"
+import { escalate } from "./escalation.ts"
 import { planPath } from "./plan.ts"
 
 const PERSPECTIVE = "spec"
@@ -94,12 +95,16 @@ export async function runReview(deps: StepDeps, run: RunState): Promise<StepResu
     deps.store.save({ ...latest, reviewRounds: round, step: "pr" })
     return { kind: "continue", message: `review が完了しました（blocking 0 件、参考 ${parsed.nonBlocking.length} 件）。記録: ${summaryPath}。次の工程: pr` }
   }
-  // M1 では blocking があれば止める。修正のループ（review-fix）は M2 で入れる
-  deps.store.save({ ...latest, reviewRounds: round, status: "escalated" })
-  return {
-    kind: "escalated",
-    message: [`review で blocking の指摘が ${parsed.blocking.length} 件ありました。記録: ${summaryPath}`, ...parsed.blocking.map(describe)].join("\n"),
-  }
+  // 修正のループ（review-fix）は #37 で入れる。それまでは、blocking があればエスカレーションする（上限 0 回のループとして扱う）
+  const reviewed = { ...latest, reviewRounds: round }
+  deps.store.save(reviewed)
+  const escalated = await escalate(deps, reviewed, {
+    reason: "loop_exhausted",
+    summary: `review で blocking の指摘が ${parsed.blocking.length} 件ありました。`,
+    history: [`review ${round} 周目: 記録 ${summaryPath}`],
+    open: parsed.blocking.map((f) => describe(f).replace(/^- /, "")),
+  })
+  return { ...escalated, message: [escalated.message, ...parsed.blocking.map(describe)].join("\n") }
 }
 
 const describe = (f: Finding) => `- ${f.id}（${f.category}、${f.ac}、${f.evidence}）: ${f.content}`
