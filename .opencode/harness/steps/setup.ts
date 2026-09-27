@@ -181,7 +181,25 @@ async function findDependencyBranch(deps: StepDeps, issue: number): Promise<stri
   if (list.code !== 0) return undefined
   const closes = new RegExp(`\\b(close[sd]?|fix(e[sd])?|resolve[sd]?)\\s+#${issue}\\b`, "i")
   const pr = (JSON.parse(list.stdout) as { headRefName: string; body: string }[]).find((p) => closes.test(p.body))
-  return pr && (await exists(pr.headRefName)) ? pr.headRefName : undefined
+  if (!pr) return undefined
+  await syncWithOrigin(deps, pr.headRefName)
+  return (await exists(pr.headRefName)) ? pr.headRefName : undefined
+}
+
+// PR の head のブランチを origin から取り込む。依存先を別のマシンで開発していても積めるように。
+// 手元になければ origin から作り、遅れていれば早送りする。手元のほうが進んでいれば、手元の作業を優先してそのままにする。
+// fetch に失敗しても（オフラインなど）止めず、手元にあるものを使う
+async function syncWithOrigin(deps: StepDeps, branch: string): Promise<void> {
+  const git = (...args: string[]) => deps.exec("git", args, { cwd: deps.root })
+  if ((await git("fetch", "--quiet", "origin", branch)).code !== 0) return
+  const remote = `refs/remotes/origin/${branch}`
+  if ((await git("rev-parse", "--verify", "--quiet", `refs/heads/${branch}`)).code !== 0) {
+    await git("branch", "--quiet", "--track", branch, remote)
+    return
+  }
+  const localIsBehind = (await git("merge-base", "--is-ancestor", `refs/heads/${branch}`, remote)).code === 0
+  // 別の worktree で使われているブランチは動かせない（失敗したら手元のまま使う）
+  if (localIsBehind) await git("branch", "--quiet", "--force", branch, remote)
 }
 
 // 依存先の確認への回答を記録する

@@ -127,6 +127,66 @@ test("「積む」を選ぶと、依存先の issue のブランチ（PR の hea
   assert.equal(store.get(runId)?.step, "plan")
 })
 
+// origin（ベアリポジトリ）を作って main を push する
+const withOrigin = (root: string) => {
+  const origin = join(dirname(root), "origin.git")
+  execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin])
+  git(root, "remote", "add", "origin", origin)
+  git(root, "push", "-q", "origin", "main")
+  return origin
+}
+const PR7 = [{ number: 20, headRefName: "feat/7-dep", body: "Closes #7" }]
+
+test("PR の head のブランチが手元になく origin にあれば、fetch して手元のブランチを作り、積む先にする", async () => {
+  const { root, deps, worktree, runId } = setup({ deps: "#7", issues: [open(7)], prs: PR7 })
+  withOrigin(root)
+  const depHead = depBranch(root, "feat/7-dep")
+  git(root, "push", "-q", "origin", "feat/7-dep")
+  git(root, "branch", "-q", "-D", "feat/7-dep")
+
+  const result = await advance(deps, runId)
+  assert.equal(result.kind, "need_user")
+  assert.match(result.message, /feat\/7-dep/)
+  assert.equal(git(root, "rev-parse", "feat/7-dep"), depHead)
+
+  record(deps, { run: runId, gate: "dependency", decision: "stack" })
+  assert.equal((await advance(deps, runId)).kind, "continue")
+  assert.equal(git(worktree, "merge-base", "--is-ancestor", depHead, "HEAD"), "")
+})
+
+test("手元のブランチが origin より遅れていれば、早送りしてから積む", async () => {
+  const { root, deps, runId } = setup({ deps: "#7", issues: [open(7)], prs: PR7 })
+  withOrigin(root)
+  const old = depBranch(root, "feat/7-dep")
+  git(root, "switch", "-q", "feat/7-dep")
+  writeFileSync(join(root, "dep2.txt"), "dep2\n")
+  git(root, "add", "dep2.txt")
+  git(root, "commit", "-q", "-m", "dep2")
+  const latest = git(root, "rev-parse", "HEAD")
+  git(root, "push", "-q", "origin", "feat/7-dep")
+  git(root, "switch", "-q", "main")
+  git(root, "branch", "-q", "-f", "feat/7-dep", old)
+
+  assert.equal((await advance(deps, runId)).kind, "need_user")
+  assert.equal(git(root, "rev-parse", "feat/7-dep"), latest)
+})
+
+test("手元のブランチが origin より進んでいれば、手元のまま使う", async () => {
+  const { root, deps, runId } = setup({ deps: "#7", issues: [open(7)], prs: PR7 })
+  withOrigin(root)
+  depBranch(root, "feat/7-dep")
+  git(root, "push", "-q", "origin", "feat/7-dep")
+  git(root, "switch", "-q", "feat/7-dep")
+  writeFileSync(join(root, "local.txt"), "local\n")
+  git(root, "add", "local.txt")
+  git(root, "commit", "-q", "-m", "local only")
+  const local = git(root, "rev-parse", "HEAD")
+  git(root, "switch", "-q", "main")
+
+  assert.equal((await advance(deps, runId)).kind, "need_user")
+  assert.equal(git(root, "rev-parse", "feat/7-dep"), local)
+})
+
 test("依存先の run が同じリポジトリにあれば、その run のブランチを積む先にする", async () => {
   const { root, store, deps, runId } = setup({ deps: "#7", issues: [open(7)] })
   depBranch(root, "feat/7-from-run")
