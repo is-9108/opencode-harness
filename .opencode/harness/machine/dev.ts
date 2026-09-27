@@ -9,6 +9,7 @@ import { runRed } from "../steps/red.ts"
 import { runGreen } from "../steps/green.ts"
 import { runChecks } from "../steps/checks.ts"
 import { runTestFix } from "../steps/test-fix.ts"
+import { pendingDecision, recordTestChange, runTestChange } from "../steps/test-change.ts"
 import { runReview } from "../steps/review.ts"
 import { runPr } from "../steps/pr.ts"
 import { auditAfterStep } from "../steps/audit.ts"
@@ -33,11 +34,13 @@ export type StepResult = { kind: "continue" | "need_user" | "escalated" | "done"
 export type RecordInput =
   | { run: string; gate: "plan"; decision: "approved" | "changes_requested" | "aborted"; feedback?: string }
   | { run: string; gate: "dependency"; decision: "wait" | "stack" | "ignore" }
+  | { run: string; gate: "test_change"; decision: "approved" | "rejected"; feedback?: string }
 
 // ゲートごとに記録できる判断
 const DECISIONS: Record<RecordInput["gate"], readonly string[]> = {
   plan: ["approved", "changes_requested", "aborted"],
   dependency: ["wait", "stack", "ignore"],
+  test_change: ["approved", "rejected"],
 }
 
 export async function advance(deps: StepDeps, runId: string): Promise<StepResult> {
@@ -46,6 +49,9 @@ export async function advance(deps: StepDeps, runId: string): Promise<StepResult
   if (run.status === "done") return { kind: "done", message: `${runId} は完了しています${run.prUrl ? `（PR: ${run.prUrl}）` : ""}` }
   if (run.status === "interrupted") return { kind: "error", message: `${runId} は中断されています` }
   if (run.status === "escalated") {
+    // テストの変更申請への判断を待っていれば、/fix ではなく判断を求める（#36）
+    const pending = pendingDecision(run)
+    if (pending) return pending
     const last = run.lastEscalation
     const detail = last ? `（${last.reason}）。報告: ${last.report}` : ""
     return { kind: "escalated", message: `${runId} はエスカレーションされています（工程: ${run.step}）${detail}\n${fixGuide(run)}` }
@@ -74,6 +80,8 @@ async function runStep(deps: StepDeps, run: RunState): Promise<StepResult> {
       return runChecks(deps, run)
     case "test-fix":
       return runTestFix(deps, run)
+    case "test-change":
+      return runTestChange(deps, run)
     case "review":
       return runReview(deps, run)
     case "pr":
@@ -93,5 +101,7 @@ export function record(deps: StepDeps, input: RecordInput): StepResult {
       return recordPlan(deps, run, input)
     case "dependency":
       return recordDependency(deps, run, input)
+    case "test_change":
+      return recordTestChange(deps, run, input)
   }
 }

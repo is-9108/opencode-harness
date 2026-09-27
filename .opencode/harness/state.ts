@@ -40,6 +40,9 @@ export type RunState = {
   // test-fix の回数（/fix で 0 に戻す）と、自動の修正（test-fix と review-fix）の合計。工程に入る前に加算する（#35）
   testFix?: number
   autoFixUsed?: number
+  // テストの変更申請（#36）。判断を待っている申請と、却下されて test-fix に伝える申請
+  pendingChangeRequest?: string
+  rejectedChangeRequest?: string
   // review を実行した回数（reviews/round-<n>/ の n）
   reviewRounds?: number
   // human: エスカレーションの後。以降は review-fix を自動で実行しない（戻さない。計画 8.3）

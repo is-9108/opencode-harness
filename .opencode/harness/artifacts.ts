@@ -1,5 +1,6 @@
 // 成果物（md）の frontmatter の読み書き（計画 2 章の基本原則 4: 完了マーカー）
-// 対応するのは「key: value」の 1 行形式だけ。成果物の frontmatter はハーネスの雛形で決めているので、それで足りる
+// 対応するのは「key: value」の 1 行形式と、「key:」の次の行から続く「  - item」のリスト（値は「, 」でつなぐ）。
+// LLM はリストの項目をリスト形式で書くことがある（#36 の実機で確認）
 
 const FRONTMATTER = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?/
 
@@ -7,9 +8,19 @@ export function readFrontmatter(content: string): Record<string, string> {
   const block = content.match(FRONTMATTER)?.[1]
   if (!block) return {}
   const data: Record<string, string> = {}
+  let listKey: string | undefined
   for (const line of block.split(/\r?\n/)) {
+    const item = line.match(/^\s+-\s+(.*)$/)
+    if (item && listKey) {
+      const value = stripComment(item[1] ?? "").replace(/^(["'])(.*)\1$/, "$2")
+      data[listKey] = data[listKey] ? `${data[listKey]}, ${value}` : value
+      continue
+    }
     const m = line.match(/^([A-Za-z0-9_]+):\s*(.*)$/)
-    if (m?.[1]) data[m[1]] = stripComment(m[2] ?? "")
+    if (m?.[1]) {
+      data[m[1]] = stripComment(m[2] ?? "")
+      listKey = data[m[1]] === "" ? m[1] : undefined
+    }
   }
   return data
 }
