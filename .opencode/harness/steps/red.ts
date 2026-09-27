@@ -7,6 +7,7 @@ import type { StepDeps, StepResult } from "../machine/dev.ts"
 import type { RunState } from "../state.ts"
 import type { PermissionRule } from "../session.ts"
 import { parseJUnit, type TestCaseResult } from "../testing/junit.ts"
+import { createLock } from "../testing/lock.ts"
 import { baseChildPermissions, runDir } from "./common.ts"
 import { parsePlan, planPath, type TestCase } from "./plan.ts"
 
@@ -109,7 +110,10 @@ export async function runRed(deps: StepDeps, run: RunState): Promise<StepResult>
 
   const commit = await checkpoint(deps, worktree, `test: #${run.issue} のテストを追加（red）`)
   if (typeof commit !== "string") return commit
+  // テストをロックする。以降の工程では、権限で編集を拒否し、工程ごとに監査する（#12）
+  const lock = createLock(worktree, deps.config.tests.globs, commit)
   deps.store.save({ ...current, step: "green", redCommit: commit })
+  deps.store.appendEvent(run.id, { type: "lock.created", commit, files: Object.keys(lock.files).length })
   deps.store.appendEvent(run.id, { type: "step.completed", step: "red", commit })
   return { kind: "continue", message: `red の検証に合格しました（${testCases.length} 件のテストが正しく失敗）。commit ${commit.slice(0, 7)}。次の工程: green` }
 }

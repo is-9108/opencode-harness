@@ -126,6 +126,10 @@ test("red が合格したら、テストをチェックポイントとして com
   assert.equal(run?.redCommit, git(worktree, "rev-parse", "HEAD"))
   assert.match(git(worktree, "log", "-1", "--format=%s"), /#12/)
   assert.match(readFileSync(join(worktree, ".harness", "run", "02-red.md"), "utf8"), /合格/)
+  // テストをロックする（ハッシュは red のチェックポイントの時点のもの）
+  const lock = JSON.parse(readFileSync(join(worktree, ".harness", "run", "test-lock.json"), "utf8"))
+  assert.equal(lock.commit, run?.redCommit)
+  assert.deepEqual(Object.keys(lock.files), ["src/slug.test.ts"])
   // チェックポイントには、テストとスタブだけを含め、ハーネス自身（.opencode/）の変更は含めない
   assert.deepEqual(git(worktree, "show", "--name-only", "--format=", "HEAD").split("\n"), ["src/slug.test.ts"])
   assert.equal(git(worktree, "status", "--porcelain"), "M .opencode/package.json")
