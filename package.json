@@ -1,0 +1,14 @@
+{
+  "name": "opencode-harness",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --experimental-strip-types --no-warnings=ExperimentalWarning --test \".opencode/harness/test/**/*.test.ts\"",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@opencode-ai/plugin": "^1.18.31",
+    "@types/node": "^22.20.4",
+    "typescript": "^7.0.2"
+  }
+}
