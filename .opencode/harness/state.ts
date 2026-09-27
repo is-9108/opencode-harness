@@ -23,6 +23,8 @@ export type RunState = {
   // ユーザーの修正指示のうち、まだ子セッションに送っていないもの
   feedback?: string
   feedbackCount?: number
+  // red の検証に合格したときの commit（テストのロックと、後の差分の基準）
+  redCommit?: string
 }
 
 export type RunList = { runs: RunState[]; broken: { id: string; error: string }[] }

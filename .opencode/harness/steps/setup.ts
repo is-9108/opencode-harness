@@ -1,4 +1,4 @@
-// setup の工程: issue を取得して保存し、issue 専用の worktree とブランチを用意する（計画 5 章、8.2）
+// setup の工程: issue を取得して保存し、issue 専用の worktree とブランチを用意し、依存をインストールする（計画 5 章、8.2）
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs"
 import { basename, join, resolve } from "node:path"
@@ -35,7 +35,17 @@ export async function runSetup(deps: StepDeps, run: RunState): Promise<StepResul
   const ensured = await ensureWorktree(deps, worktree, branch)
   if (ensured) return ensured
 
-  // 3. issue のスナップショット。成果物のディレクトリは、それ自体の .gitignore で git の管理から外す
+  // 3. 依存のインストール（node_modules などは git の管理外なので、worktree には入っていない）
+  if (config.setup.install) {
+    const install = await deps.shell(config.setup.install, { cwd: worktree, timeoutSec: config.setup.timeoutSec })
+    if (install.code !== 0 || install.timedOut) {
+      const out = (install.stderr || install.stdout).trim().split(/\r?\n/).slice(-10).join("\n")
+      const timedOut = install.timedOut ? "（タイムアウト）" : ""
+      return { kind: "error", message: `worktree での依存のインストール（${config.setup.install}）に失敗しました${timedOut}:\n${out}` }
+    }
+  }
+
+  // 4. issue のスナップショット。成果物のディレクトリは、それ自体の .gitignore で git の管理から外す
   const runDir = join(worktree, ".harness", "run")
   mkdirSync(runDir, { recursive: true })
   writeFileSync(join(worktree, ".harness", ".gitignore"), "*\n")

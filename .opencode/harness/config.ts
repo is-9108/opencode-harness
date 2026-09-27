@@ -33,6 +33,8 @@ export type HarnessConfig = {
   budget: { maxTokensPerIssue: number; maxCostUsdPerIssue: number; warnAtRatio: number }
   context: { compactAtTokens: number; reserved: number; prune: boolean }
   git: { branch: string; baseBranch: string; worktreeRoot: string }
+  // worktree を作った直後に実行する依存のインストール（node_modules などは worktree にコピーされないため）
+  setup: { install?: string; timeoutSec: number }
   review: { perspectives: Perspective[]; advisoryModel: string }
 }
 
@@ -59,6 +61,7 @@ const DEFAULTS = {
   budget: { maxTokensPerIssue: 5_000_000, maxCostUsdPerIssue: 20, warnAtRatio: 0.8 },
   context: { compactAtTokens: 240_000, reserved: 20_000, prune: true },
   git: { branch: "feat/{issue}-{slug}", baseBranch: "main", worktreeRoot: "../{repo}.worktrees" },
+  setup: { install: undefined as string | undefined, timeoutSec: 900 },
   review: {
     perspectives: [
       { name: "spec", session: "separate", blocking: true, rounds: "every", model: "dev.review.spec" },
@@ -71,7 +74,7 @@ const DEFAULTS = {
   },
 }
 
-const TOP_LEVEL_KEYS = ["$schema", "providers", "models", "steps", "checks", "tests", "dependencyManifests", "loops", "budget", "context", "git", "review"]
+const TOP_LEVEL_KEYS = ["$schema", "providers", "models", "steps", "checks", "tests", "dependencyManifests", "loops", "budget", "context", "git", "setup", "review"]
 const MODEL_REF = /^[^/\s]+\/\S+$/
 
 export function loadConfig(rootDir: string): LoadResult {
@@ -130,6 +133,10 @@ export function validateConfig(raw: unknown): { config?: HarnessConfig; errors: 
 
   const git = section("git", DEFAULTS.git)
   for (const [key, value] of Object.entries(git)) if (typeof value !== "string" || value === "") err(`git.${key}`, "空でない文字列である必要があります")
+
+  const setup = section("setup", DEFAULTS.setup)
+  if (setup.install !== undefined && (typeof setup.install !== "string" || setup.install.trim() === "")) err("setup.install", "空でない文字列である必要があります（不要なら省略してください）")
+  positiveInt(setup.timeoutSec, "setup.timeoutSec", err)
 
   const tests = section("tests", { globs: [] as string[], ...DEFAULTS.tests })
   stringArray(tests.globs, "tests.globs", err, { nonEmpty: true })
@@ -200,7 +207,7 @@ export function validateConfig(raw: unknown): { config?: HarnessConfig; errors: 
 
   if (errors.length > 0) return { errors, warnings }
   return {
-    config: { providers, models, steps, checks, tests, dependencyManifests, loops, budget, context, git, review },
+    config: { providers, models, steps, checks, tests, dependencyManifests, loops, budget, context, git, setup, review },
     errors,
     warnings,
   }

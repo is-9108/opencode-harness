@@ -1,0 +1,74 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<testsuites name="vitest tests" tests="6" failures="5" errors="0" time="0.0096376">
+    <testsuite name="src/broken-import.test.ts" timestamp="2026-09-27T07:30:23.925Z" hostname="host" tests="1" failures="1" errors="0" skipped="0" time="0">
+        <testcase classname="src/broken-import.test.ts" name="src/broken-import.test.ts" time="0">
+            <failure message="Cannot find module &apos;./does-not-exist&apos; imported from /repo/src/broken-import.test.ts" type="Error">
+Error: Cannot find module &apos;./does-not-exist&apos; imported from /repo/src/broken-import.test.ts
+ ❯ src/broken-import.test.ts:2:1
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+Serialized Error: { code: &apos;ERR_MODULE_NOT_FOUND&apos; }
+            </failure>
+        </testcase>
+    </testsuite>
+    <testsuite name="src/ref.test.ts" timestamp="2026-09-27T07:30:23.928Z" hostname="host" tests="1" failures="1" errors="0" skipped="0" time="0.0030474">
+        <testcase classname="src/ref.test.ts" name="[TC-05] 未定義の関数を呼ぶ" time="0.0022902">
+            <failure message="globalThis.nope is not a function" type="TypeError">
+TypeError: globalThis.nope is not a function
+ ❯ src/ref.test.ts:2:60
+            </failure>
+        </testcase>
+    </testsuite>
+    <testsuite name="src/slug.test.ts" timestamp="2026-09-27T07:30:23.929Z" hostname="host" tests="3" failures="2" errors="0" skipped="0" time="0.0065902">
+        <testcase classname="src/slug.test.ts" name="slugify &gt; [TC-01] 空白をハイフンにする" time="0.0048097">
+            <failure message="expected &apos;a b&apos; to be &apos;a-b&apos; // Object.is equality" type="AssertionError">
+AssertionError: expected &apos;a b&apos; to be &apos;a-b&apos; // Object.is equality
+
+Expected: &quot;a-b&quot;
+Received: &quot;a b&quot;
+
+ ❯ src/slug.test.ts:6:32
+            </failure>
+        </testcase>
+        <testcase classname="src/slug.test.ts" name="slugify &gt; [TC-02] 未実装の関数を呼ぶ" time="0.0005971">
+            <failure message="not implemented" type="Error">
+Error: not implemented
+ ❯ slugify src/slug.ts:2:9
+ ❯ src/slug.test.ts:9:12
+            </failure>
+        </testcase>
+        <testcase classname="src/slug.test.ts" name="slugify &gt; 既存のテスト（通る）" time="0.0001795">
+        </testcase>
+    </testsuite>
+    <testsuite name="src/syntax.test.ts" timestamp="2026-09-27T07:30:23.930Z" hostname="host" tests="1" failures="1" errors="0" skipped="0" time="0">
+        <testcase classname="src/syntax.test.ts" name="src/syntax.test.ts" time="0">
+            <failure message="Transform failed with 1 error:
+
+[31m[PARSE_ERROR] [0mUnexpected token
+   [38;5;246m╭[0m[38;5;246m─[0m[38;5;246m[[0m src/syntax.test.ts:2:45 [38;5;246m][0m
+   [38;5;246m│[0m
+ [38;5;246m2 │[0m [38;5;249mi[0m[38;5;249mt[0m[38;5;249m([0m[38;5;249m&quot;[0m[38;5;249m[[0m[38;5;249mT[0m[38;5;249mC[0m[38;5;249m-[0m[38;5;249m0[0m[38;5;249m4[0m[38;5;249m][0m[38;5;249m [0m[38;5;249m構[0m[38;5;249m文[0m[38;5;249mエ[0m[38;5;249mラ[0m[38;5;249mー[0m[38;5;249m&quot;[0m[38;5;249m,[0m[38;5;249m [0m[38;5;249m([0m[38;5;249m)[0m[38;5;249m [0m[38;5;249m=[0m[38;5;249m&gt;[0m[38;5;249m [0m[38;5;249m{[0m[38;5;249m [0m[38;5;249me[0m[38;5;249mx[0m[38;5;249mp[0m[38;5;249me[0m[38;5;249mc[0m[38;5;249mt[0m[38;5;249m([0m[38;5;249m1[0m[38;5;249m)[0m[38;5;249m.[0m[38;5;249mt[0m[38;5;249mo[0m[38;5;249mB[0m[38;5;249me[0m[38;5;249m([0m[38;5;249m [0m}[38;5;249m)[0m
+ [38;5;240m  │[0m                                                  ┬  
+ [38;5;240m  │[0m                                                  ╰── 
+[38;5;246m───╯[0m
+" type="Error">
+Error: Transform failed with 1 error:
+
+[PARSE_ERROR] Unexpected token
+   ╭─[ src/syntax.test.ts:2:45 ]
+   │
+ 2 │ it(&quot;[TC-04] 構文エラー&quot;, () =&gt; { expect(1).toBe( })
+   │                                                  ┬  
+   │                                                  ╰── 
+───╯
+
+  Plugin: vite:oxc
+  File: /repo/src/syntax.test.ts
+ ❯ transformWithOxc node_modules/vite/dist/node/chunks/node.js:7551:19
+ ❯ TransformPluginContext.transform node_modules/vite/dist/node/chunks/node.js:7623:26
+ ❯ EnvironmentPluginContainer.transform node_modules/vite/dist/node/chunks/node.js:8515:51
+ ❯ loadAndTransform node_modules/vite/dist/node/chunks/node.js:19998:26
+            </failure>
+        </testcase>
+    </testsuite>
+</testsuites>

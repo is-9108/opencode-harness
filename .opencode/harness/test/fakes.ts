@@ -51,3 +51,8 @@ export const defaultResult = (): AssistantResult => ({
   tokens: { input: 100, output: 20, reasoning: 0, cache: { read: 0, write: 0 } },
   cost: 0,
 })
+
+// シェルのコマンドを実行しない工程のテストで使う。呼ばれたら失敗させる
+export const noShell = async (): Promise<never> => {
+  throw new Error("この工程ではシェルのコマンドは呼ばれないはず")
+}
