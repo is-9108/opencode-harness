@@ -1,7 +1,8 @@
 // review の工程（計画 8.4）。M1 では spec の観点だけを、judge なしで実行する。
 // レビュアーの出力を機械的に読み取り、根拠（AC の ID と「ファイル:行」）のそろった spec_violation だけを blocking として数える。
 // blocking があれば review-fix のループに入る（#37）。上限・autoFixBudget・再発（oscillation）・human モードではエスカレーションする。
-// spec_gap（仕様の曖昧さ）は、ループの回数に数えずに、先にユーザーに解釈を聞く（#38）
+// spec_gap（仕様の曖昧さ）は、ループの回数に数えずに、先にユーザーに解釈を聞く（#38）。
+// 免除リスト（waivers.md）にある指摘は、blocking に数えない（#39）
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { readFrontmatter } from "../artifacts.ts"
@@ -12,6 +13,7 @@ import { escalate, type Escalation } from "./escalation.ts"
 import { planPath } from "./plan.ts"
 import { reviewFixAttempts } from "./review-fix.ts"
 import { decisionsPath, parseOptions, runSpecGap } from "./spec-gap.ts"
+import { readWaivers } from "./waiver.ts"
 
 const PERSPECTIVE = "spec"
 const CATEGORIES = ["spec_violation", "spec_gap", "test_gaming", "safety_critical", "other"] as const
@@ -29,10 +31,12 @@ export type ParsedReview = {
   gaps: { finding: Finding; options: string[] }[]
   downgraded: { finding: Finding; reason: string }[]
   nonBlocking: Finding[]
+  // ユーザーが免除した blocking の指摘（parseReview では空。runReview が免除リストと照らし合わせて移す）
+  waived: { finding: Finding; reason: string }[]
 }
 
 export function parseReview(content: string, perspective = PERSPECTIVE): ParsedReview {
-  const result: ParsedReview = { problems: [], blocking: [], gaps: [], downgraded: [], nonBlocking: [] }
+  const result: ParsedReview = { problems: [], blocking: [], gaps: [], downgraded: [], nonBlocking: [], waived: [] }
   if (readFrontmatter(content).status !== "done") result.problems.push("frontmatter が status: done になっていません")
   if (!/^\|\s*ID\s*\|\s*分類\s*\|/m.test(content)) result.problems.push("指摘の表（| ID | 分類 | blocking | AC | 根拠（ファイル:行） | 内容 |）がありません")
 
@@ -116,14 +120,18 @@ export async function runReview(deps: StepDeps, run: RunState): Promise<StepResu
   // 回答済みの spec_gap は、もう一度は聞かない
   const latest = deps.store.get(run.id) ?? run
   const answered = new Set(latest.answeredGaps ?? [])
+  // 免除した指摘は、blocking に数えない（ループの判定にも、再発の履歴にも使わない）
+  const waivers = new Map(readWaivers(worktree).map((w) => [w.key, w.reason]))
   parsed = {
     ...parsed,
+    blocking: parsed.blocking.filter((f) => !waivers.has(f.key)),
+    waived: parsed.blocking.filter((f) => waivers.has(f.key)).map((f) => ({ finding: f, reason: waivers.get(f.key)! })),
     gaps: parsed.gaps.filter((g) => !answered.has(g.finding.key)),
     downgraded: [...parsed.downgraded, ...parsed.gaps.filter((g) => answered.has(g.finding.key)).map((g) => ({ finding: g.finding, reason: `回答済みの spec_gap です（${decisionsPath(worktree)}）` }))],
   }
   const summaryPath = summaryPathOf(worktree, round)
   writeFileSync(summaryPath, renderSummary(round, parsed))
-  deps.store.appendEvent(run.id, { type: "review.completed", round, blocking: parsed.blocking.length, gaps: parsed.gaps.length, downgraded: parsed.downgraded.length, nonBlocking: parsed.nonBlocking.length })
+  deps.store.appendEvent(run.id, { type: "review.completed", round, blocking: parsed.blocking.length, waived: parsed.waived.length, gaps: parsed.gaps.length, downgraded: parsed.downgraded.length, nonBlocking: parsed.nonBlocking.length })
 
   // 一度解消した指摘（前の周に出て、直前の周には出なかった指摘）が再び出たら、揺り戻し
   const history = latest.findingRounds ?? {}
@@ -195,6 +203,9 @@ function renderSummary(round: number, parsed: ParsedReview): string {
     "",
     "## spec_gap（ループに数えず、ユーザーに解釈を聞く）",
     ...(parsed.gaps.length ? parsed.gaps.map((g) => `${describe(g.finding)}`) : ["なし"]),
+    "",
+    `## 免除した指摘（ユーザーが免除。blocking に数えない）`,
+    ...(parsed.waived.length ? parsed.waived.map((w) => `${describe(w.finding)} — 免除の理由: ${w.reason}`) : ["なし"]),
     "",
     "## 根拠が足りないため数えなかった指摘",
     ...(parsed.downgraded.length ? parsed.downgraded.map((d) => `${describe(d.finding)} — ${d.reason}`) : ["なし"]),

@@ -187,3 +187,16 @@ test("子セッションには、テンプレートと成果物の場所を渡�
   assert.match(prompt, /:\(exclude\)\.opencode/)
   assert.ok(calls[0]?.permission?.some((r) => r.permission === "edit" && r.action === "allow" && r.pattern.endsWith("pr-body.md")))
 })
+
+test("免除した指摘がある run では、PR 本文に免除した指摘と理由を載せる（#39 AC-2）", async () => {
+  const { deps, gh, calls, worktree, postedBody, runId } = setup([body()])
+  writeFileSync(
+    join(worktree, ".harness", "run", "waivers.md"),
+    "# 免除リスト\n\n| ID | 指摘 | 理由 | 日時 |\n|---|---|---|---|\n| spec:AC-2:src/slug.ts | F-01: 記号だけの入力で空文字を返していない | 次の issue で見直す | 2026-09-27T00:00:00.000Z |\n",
+  )
+  await advance(deps, runId)
+  const posted = postedBody(gh.find((a) => a[1] === "create")!)
+  assert.match(posted, /免除した指摘[\s\S]*spec:AC-2:src\/slug\.ts（F-01: 記号だけの入力で空文字を返していない）— 理由: 次の issue で見直す/)
+  // pr-writer にも免除リストを渡す
+  assert.match(calls[0]?.prompt ?? "", /waivers\.md/)
+})

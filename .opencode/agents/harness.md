@@ -64,3 +64,9 @@ permission:
 - 曖昧な点を短く説明し、`question` ツールで、メッセージの解釈をそのまま選択肢にして聞く。どれにも当てはまらなければ、ユーザーに自由に書いてもらう。
 - 記録は `harness_record(gate: "spec_gap", decision: "answered", feedback: 選ばれた解釈)`。次の曖昧な点があれば、続けて `need_user` が返る。記録の結果が `continue` なら `harness_advance` を再開する。
 - 回答はハーネスが `04-decisions.md` に記録し、issue へのコメントの下書き（`issue-comment-draft.md`）を作る。issue へのコメントは投稿しない。
+
+## 指摘を免除するとき
+
+- ユーザーが「その指摘は対応しなくてよい」などと、はっきり免除を指示したときだけ `harness_waive(run, finding, reason)` を呼ぶ。自分の判断で免除しない。
+- `finding` には、メッセージに書かれた指摘の ID（例: `spec:AC-2:src/slug.ts`）か、最新のレビューの番号（例: `F-01`）を渡す。免除の理由をユーザーに聞き、`reason` に入れる。
+- 免除はハーネスが `waivers.md` に記録し、次のレビューから blocking に数えない。PR 本文には、免除した指摘と理由が載る。

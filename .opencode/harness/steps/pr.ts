@@ -7,6 +7,7 @@ import type { StepDeps, StepResult } from "../machine/dev.ts"
 import type { RunState } from "../state.ts"
 import { baseBranchOf, baseChildPermissions, editOnly, readTemplate, runDir } from "./common.ts"
 import { planPath } from "./plan.ts"
+import { readWaivers, waiversPath } from "./waiver.ts"
 
 const MODEL_KEY = "dev.pr"
 const BODY_FILE = "pr-body.md"
@@ -125,6 +126,9 @@ function harnessRecord(deps: StepDeps, run: RunState, diffLines: number): string
     ...(lastChecks?.resolved?.length ? ["", "ベースラインの失敗が解消したもの:", ...lastChecks.resolved.map((r) => `- ${r}`)] : []),
     ...(lastChecks?.flaky?.length ? ["", "flaky（実行し直すと結果が変わったテスト。判定には数えていない）:", ...lastChecks.flaky.map((f) => `- ${f}`)] : []),
   ]
+  // 免除した指摘と理由（#39）。LLM の書き漏らしがないよう、ハーネスが免除リストから載せる
+  const waivers = readWaivers(run.worktree ?? "")
+  const waiverLines = waivers.length ? ["", "免除した指摘（ユーザーが免除し、blocking に数えていない）:", ...waivers.map((w) => `- ${w.key}（${w.finding}）— 理由: ${w.reason}`)] : []
   const n = (v: number) => v.toLocaleString("en-US")
   const total = children.reduce((s, e) => s + (e.tokens?.total ?? 0), 0)
   return [
@@ -137,6 +141,7 @@ function harnessRecord(deps: StepDeps, run: RunState, diffLines: number): string
     `- トークンの合計: ${n(total)}`,
     `- checks: ${run.checksRuns ?? 0} 回、review: ${run.reviewRounds ?? 0} 回、差分: ${diffLines} 行`,
     ...baselineLines,
+    ...waiverLines,
     "",
     "🤖 opencode ハーネスで作成",
   ].join("\n")
@@ -153,6 +158,7 @@ function writePrompt(deps: StepDeps, run: RunState, worktree: string, bodyPath: 
     `- テストの記録: ${join(dir, "02-red.md")}、${join(dir, "03-green-log.md")}`,
     `- checks の結果: ${join(dir, "checks", `run-${run.checksRuns ?? 1}.md`)}`,
     `- レビューの集計: ${join(dir, "reviews", `round-${run.reviewRounds ?? 1}`, "summary.md")}`,
+    ...(existsSync(waiversPath(worktree)) ? [`- 免除リスト: ${waiversPath(worktree)}（「レビュー」の欄に、免除した指摘と理由を書く）`] : []),
     `- 差分: git diff ${baseBranchOf(deps.config, run)}...HEAD -- . ":(exclude).opencode"（ハーネス自身の .opencode/ の変更は PR の説明に含めない）`,
     "",
     `出力先: ${bodyPath}（このファイル以外は編集できない）。「関連 issue」には「Closes #${run.issue}」と書く。`,
