@@ -27,6 +27,8 @@ export type RunState = {
   redCommit?: string
   // green の完了時の commit
   greenCommit?: string
+  // checks を実行した回数（checks/run-<n>.md の n）
+  checksRuns?: number
 }
 
 export type RunList = { runs: RunState[]; broken: { id: string; error: string }[] }
