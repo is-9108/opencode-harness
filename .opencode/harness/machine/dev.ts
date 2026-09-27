@@ -12,6 +12,7 @@ import { runTestFix } from "../steps/test-fix.ts"
 import { pendingDecision, recordTestChange, runTestChange } from "../steps/test-change.ts"
 import { runReview } from "../steps/review.ts"
 import { runReviewFix } from "../steps/review-fix.ts"
+import { recordSpecGap, runSpecGap } from "../steps/spec-gap.ts"
 import { runPr } from "../steps/pr.ts"
 import { auditAfterStep } from "../steps/audit.ts"
 import { fixGuide } from "../steps/escalation.ts"
@@ -36,12 +37,14 @@ export type RecordInput =
   | { run: string; gate: "plan"; decision: "approved" | "changes_requested" | "aborted"; feedback?: string }
   | { run: string; gate: "dependency"; decision: "wait" | "stack" | "ignore" }
   | { run: string; gate: "test_change"; decision: "approved" | "rejected"; feedback?: string }
+  | { run: string; gate: "spec_gap"; decision: "answered"; feedback?: string }
 
 // ゲートごとに記録できる判断
 const DECISIONS: Record<RecordInput["gate"], readonly string[]> = {
   plan: ["approved", "changes_requested", "aborted"],
   dependency: ["wait", "stack", "ignore"],
   test_change: ["approved", "rejected"],
+  spec_gap: ["answered"],
 }
 
 export async function advance(deps: StepDeps, runId: string): Promise<StepResult> {
@@ -87,6 +90,8 @@ async function runStep(deps: StepDeps, run: RunState): Promise<StepResult> {
       return runReview(deps, run)
     case "review-fix":
       return runReviewFix(deps, run)
+    case "spec-gap":
+      return runSpecGap(deps, run)
     case "pr":
       return runPr(deps, run)
     default:
@@ -106,5 +111,7 @@ export function record(deps: StepDeps, input: RecordInput): StepResult {
       return recordDependency(deps, run, input)
     case "test_change":
       return recordTestChange(deps, run, input)
+    case "spec_gap":
+      return recordSpecGap(deps, run, input)
   }
 }

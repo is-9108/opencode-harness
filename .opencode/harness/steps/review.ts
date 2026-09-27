@@ -1,15 +1,17 @@
 // review の工程（計画 8.4）。M1 では spec の観点だけを、judge なしで実行する。
 // レビュアーの出力を機械的に読み取り、根拠（AC の ID と「ファイル:行」）のそろった spec_violation だけを blocking として数える。
-// blocking があれば review-fix のループに入る（#37）。上限・autoFixBudget・再発（oscillation）・human モードではエスカレーションする
+// blocking があれば review-fix のループに入る（#37）。上限・autoFixBudget・再発（oscillation）・human モードではエスカレーションする。
+// spec_gap（仕様の曖昧さ）は、ループの回数に数えずに、先にユーザーに解釈を聞く（#38）
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join } from "node:path"
 import { readFrontmatter } from "../artifacts.ts"
 import type { StepDeps, StepResult } from "../machine/dev.ts"
-import type { RunState } from "../state.ts"
+import type { Finding, RunState } from "../state.ts"
 import { baseBranchOf, baseChildPermissions, editOnly, readTemplate, runDir } from "./common.ts"
 import { escalate, type Escalation } from "./escalation.ts"
 import { planPath } from "./plan.ts"
 import { reviewFixAttempts } from "./review-fix.ts"
+import { decisionsPath, parseOptions, runSpecGap } from "./spec-gap.ts"
 
 const PERSPECTIVE = "spec"
 const CATEGORIES = ["spec_violation", "spec_gap", "test_gaming", "safety_critical", "other"] as const
@@ -18,17 +20,19 @@ const BLOCKING_CATEGORIES = new Set(["spec_violation"])
 const EVIDENCE = /[\w./\\-]+:\d+/
 const AC_ID = /\bAC-\d+\b/
 
-// id はレビュアーが振る周ごとの連番（F-01）。key は周をまたいで同じ指摘を見分ける ID（観点 + AC の ID + ファイル。judge は M3）
-export type Finding = { id: string; key: string; category: string; blocking: boolean; ac: string; evidence: string; content: string }
+// Finding の id はレビュアーが振る周ごとの連番（F-01）。key は周をまたいで同じ指摘を見分ける ID（観点 + AC の ID + ファイル。judge は M3）
+export type { Finding }
 export type ParsedReview = {
   problems: string[]
   blocking: Finding[]
+  // 根拠（曖昧な AC の ID と、2 つ以上の解釈）のそろった spec_gap。ユーザーに聞く
+  gaps: { finding: Finding; options: string[] }[]
   downgraded: { finding: Finding; reason: string }[]
   nonBlocking: Finding[]
 }
 
 export function parseReview(content: string, perspective = PERSPECTIVE): ParsedReview {
-  const result: ParsedReview = { problems: [], blocking: [], downgraded: [], nonBlocking: [] }
+  const result: ParsedReview = { problems: [], blocking: [], gaps: [], downgraded: [], nonBlocking: [] }
   if (readFrontmatter(content).status !== "done") result.problems.push("frontmatter が status: done になっていません")
   if (!/^\|\s*ID\s*\|\s*分類\s*\|/m.test(content)) result.problems.push("指摘の表（| ID | 分類 | blocking | AC | 根拠（ファイル:行） | 内容 |）がありません")
 
@@ -41,7 +45,11 @@ export function parseReview(content: string, perspective = PERSPECTIVE): ParsedR
     const f: Finding = { id, key: findingKey(perspective, ac, evidence), category: cells[2] ?? "", blocking: cells[3] === "yes", ac, evidence, content: cells[6] ?? "" }
     if (!(CATEGORIES as readonly string[]).includes(f.category)) result.problems.push(`${id} の分類「${f.category}」は決まりにありません（${CATEGORIES.join(" / ")}）`)
     if (cells[3] !== "yes" && cells[3] !== "no") result.problems.push(`${id} の blocking は yes か no で書いてください（「${cells[3]}」）`)
-    if (!f.blocking) result.nonBlocking.push(f)
+    if (f.category === "spec_gap") {
+      const options = parseOptions(f.content)
+      if (AC_ID.test(f.ac) && options.length >= 2) result.gaps.push({ finding: f, options })
+      else result.downgraded.push({ finding: f, reason: "spec_gap の根拠（曖昧な AC の ID と、「解釈1: … / 解釈2: …」の 2 つ以上の解釈）が足りないため、other として扱います" })
+    } else if (!f.blocking) result.nonBlocking.push(f)
     else if (!BLOCKING_CATEGORIES.has(f.category)) result.downgraded.push({ finding: f, reason: `分類 ${f.category} はこの観点では blocking にできません` })
     else if (!AC_ID.test(f.ac)) result.downgraded.push({ finding: f, reason: "対応する AC の ID がありません" })
     else if (!EVIDENCE.test(f.evidence)) result.downgraded.push({ finding: f, reason: "根拠（ファイル:行）がありません" })
@@ -105,10 +113,17 @@ export async function runReview(deps: StepDeps, run: RunState): Promise<StepResu
       return { kind: "error", message: [`レビューの出力が不完全です（${output}）:`, ...parsed.problems.map((p) => `- ${p}`)].join("\n") }
   }
 
+  // 回答済みの spec_gap は、もう一度は聞かない
+  const latest = deps.store.get(run.id) ?? run
+  const answered = new Set(latest.answeredGaps ?? [])
+  parsed = {
+    ...parsed,
+    gaps: parsed.gaps.filter((g) => !answered.has(g.finding.key)),
+    downgraded: [...parsed.downgraded, ...parsed.gaps.filter((g) => answered.has(g.finding.key)).map((g) => ({ finding: g.finding, reason: `回答済みの spec_gap です（${decisionsPath(worktree)}）` }))],
+  }
   const summaryPath = summaryPathOf(worktree, round)
   writeFileSync(summaryPath, renderSummary(round, parsed))
-  const latest = deps.store.get(run.id) ?? run
-  deps.store.appendEvent(run.id, { type: "review.completed", round, blocking: parsed.blocking.length, downgraded: parsed.downgraded.length, nonBlocking: parsed.nonBlocking.length })
+  deps.store.appendEvent(run.id, { type: "review.completed", round, blocking: parsed.blocking.length, gaps: parsed.gaps.length, downgraded: parsed.downgraded.length, nonBlocking: parsed.nonBlocking.length })
 
   // 一度解消した指摘（前の周に出て、直前の周には出なかった指摘）が再び出たら、揺り戻し
   const history = latest.findingRounds ?? {}
@@ -117,6 +132,13 @@ export async function runReview(deps: StepDeps, run: RunState): Promise<StepResu
   for (const f of parsed.blocking) findingRounds[f.key] = [...new Set([...(findingRounds[f.key] ?? []), round])]
   const reviewed = { ...latest, reviewRounds: round, reviewedCommit: head.stdout.trim(), findingRounds }
 
+  // spec_gap があれば、review-fix より先にユーザーに聞く。ループの回数は増やさない
+  if (parsed.gaps.length > 0) {
+    const pendingSpecGaps = parsed.gaps.map(({ finding: f, options }) => ({ id: f.id, key: f.key, ac: f.ac, content: f.content, options, round }))
+    const waiting = deps.store.save({ ...reviewed, step: "spec-gap", pendingSpecGaps, specGapFollowUp: { blocking: parsed.blocking, recurred, summary: summaryPath } })
+    deps.store.appendEvent(run.id, { type: "spec-gap.asked", round, gaps: pendingSpecGaps.map((g) => g.key) })
+    return runSpecGap(deps, waiting)
+  }
   if (parsed.blocking.length === 0) {
     deps.store.save({ ...reviewed, step: "pr" })
     return { kind: "continue", message: `review が完了しました（blocking 0 件、参考 ${parsed.nonBlocking.length} 件）。記録: ${summaryPath}。次の工程: pr` }
@@ -126,7 +148,7 @@ export async function runReview(deps: StepDeps, run: RunState): Promise<StepResu
 }
 
 // blocking の指摘があったときに、review-fix に進むか、エスカレーションするかを決める
-async function afterReviewBlocking(deps: StepDeps, run: RunState, blocking: Finding[], recurred: Finding[], summaryPath: string): Promise<StepResult> {
+export async function afterReviewBlocking(deps: StepDeps, run: RunState, blocking: Finding[], recurred: Finding[], summaryPath: string): Promise<StepResult> {
   const loops = deps.config.loops
   const reviewFix = run.reviewFix ?? 0
   const used = run.autoFixUsed ?? 0
@@ -171,6 +193,9 @@ function renderSummary(round: number, parsed: ParsedReview): string {
     "## blocking（ループの対象）",
     ...(parsed.blocking.length ? parsed.blocking.map(describe) : ["なし"]),
     "",
+    "## spec_gap（ループに数えず、ユーザーに解釈を聞く）",
+    ...(parsed.gaps.length ? parsed.gaps.map((g) => `${describe(g.finding)}`) : ["なし"]),
+    "",
     "## 根拠が足りないため数えなかった指摘",
     ...(parsed.downgraded.length ? parsed.downgraded.map((d) => `${describe(d.finding)} — ${d.reason}`) : ["なし"]),
     "",
@@ -196,6 +221,7 @@ function reviewPrompt(worktree: string, diffPath: string, output: string, previo
     `- 差分: ${diffPath}${previousSummary ? "（前回のレビューからの差分）" : ""}`,
     `- issue: ${join(runDir(worktree), "00-issue.md")}`,
     `- 計画: ${planPath(worktree)}`,
+    ...(existsSync(decisionsPath(worktree)) ? [`- 仕様の確認の記録: ${decisionsPath(worktree)}（ユーザーが決めた解釈。受け入れ基準と合わせて仕様の正とし、実装がこの解釈に合っているかも確かめる。回答済みの点を spec_gap として再び挙げない）`] : []),
     "- 必要に応じて、差分に出てくるファイルの全体を読んでよい",
     `- 出力先: ${output}（このファイル以外は編集できない）。エージェントの説明にある形式で書き、書き終えたら status: done にする`,
     "",

@@ -1,34 +1,12 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { readFileSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 import { advance } from "../machine/dev.ts"
-import { FAIL, PASS, fixIt, git, setupLoop as setup, type Behave } from "./loop-fixture.ts"
+import { FAIL, PASS, fixIt, fixer, git, reviewer, setupLoop as setup, type Behave } from "./loop-fixture.ts"
 
 const VIOLATION = "| F-01 | spec_violation | yes | AC-2 | src/slug.ts:1 | 記号だけの入力で空文字を返していない |"
 const OTHER_VIOLATION = "| F-01 | spec_violation | yes | AC-3 | src/other.ts:1 | 長さの上限を守っていない |"
-
-// reviewer: 依頼にある出力先に、指摘の表を書く
-const reviewer =
-  (...rows: string[]): Behave =>
-  (_wt, call) => {
-    const output = call.prompt.match(/出力先: (\S+?)（/)?.[1]
-    assert.ok(output, "レビューの依頼に出力先がない")
-    mkdirSync(dirname(output), { recursive: true })
-    writeFileSync(output, `---\nstatus: done\nperspective: spec\n---\n## 指摘\n| ID | 分類 | blocking | AC | 根拠（ファイル:行） | 内容 |\n|---|---|---|---|---|---|\n${rows.join("\n")}\n`)
-    return "completed"
-  }
-
-// review-fixer: 依頼にある記録ファイルに対応を書き、実装を少し変える
-const fixer: Behave = (wt, call) => {
-  const record = call.prompt.match(/[^\s（、]*review-fix[\\/]\d+\.md/)?.[0]
-  assert.ok(record, "review-fix の依頼に記録ファイルがない")
-  const k = record.match(/(\d+)\.md$/)?.[1]
-  mkdirSync(dirname(record), { recursive: true })
-  writeFileSync(record, `---\nstatus: done\n---\n## 対応\nF-01: 直した\n\n## 修正\n記号だけの入力を空文字にした（${k} 回目）\n`)
-  writeFileSync(join(wt, "src", "slug.ts"), `export const slugify = (s: string) => s.replace(/ /g, "-") // review-fix ${k}\n`)
-  return "completed"
-}
 
 test("blocking の指摘 1 件を review-fix が直し、checks → review に戻って解消すれば pr に進む（AC-1）", async () => {
   const { store, worktree, calls, drive, runId } = setup([PASS], [reviewer(VIOLATION), fixer, reviewer()])

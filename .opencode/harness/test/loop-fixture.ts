@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { join } from "node:path"
+import { dirname, join } from "node:path"
 import { advance, type StepDeps, type StepResult } from "../machine/dev.ts"
 import { createLock } from "../testing/lock.ts"
 import { createStore, startRun } from "../state.ts"
@@ -29,6 +29,28 @@ export const fixIt: Behave = (wt, _call, k) => {
   mkdirSync(join(wt, ".harness", "run", "test-fix"), { recursive: true })
   writeFileSync(join(wt, ".harness", "run", "test-fix", `${k}.md`), `---\nstatus: done\n---\n## 原因\n境界値の扱いが逆だった（${k} 回目）\n\n## 修正\nsrc/slug.ts の条件を直した\n`)
   writeFileSync(join(wt, "src", "slug.ts"), `export const slugify = (s: string) => s.replace(/ /g, "-") // fix ${k}\n`)
+  return "completed"
+}
+
+// reviewer: 依頼にある出力先に、指摘の表を書く
+export const reviewer =
+  (...rows: string[]): Behave =>
+  (_wt, call) => {
+    const output = call.prompt.match(/出力先: (\S+?)（/)?.[1]
+    assert.ok(output, "レビューの依頼に出力先がない")
+    mkdirSync(dirname(output), { recursive: true })
+    writeFileSync(output, `---\nstatus: done\nperspective: spec\n---\n## 指摘\n| ID | 分類 | blocking | AC | 根拠（ファイル:行） | 内容 |\n|---|---|---|---|---|---|\n${rows.join("\n")}\n`)
+    return "completed"
+  }
+
+// review-fixer: 依頼にある記録ファイルに対応を書き、実装を少し変える
+export const fixer: Behave = (wt, call) => {
+  const record = call.prompt.match(/[^\s（、]*review-fix[\\/]\d+\.md/)?.[0]
+  assert.ok(record, "review-fix の依頼に記録ファイルがない")
+  const k = record.match(/(\d+)\.md$/)?.[1]
+  mkdirSync(dirname(record), { recursive: true })
+  writeFileSync(record, `---\nstatus: done\n---\n## 対応\nF-01: 直した\n\n## 修正\n記号だけの入力を空文字にした（${k} 回目）\n`)
+  writeFileSync(join(wt, "src", "slug.ts"), `export const slugify = (s: string) => s.replace(/ /g, "-") // review-fix ${k}\n`)
   return "completed"
 }
 
