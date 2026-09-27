@@ -35,6 +35,8 @@ export type RunState = {
   greenCommit?: string
   // checks を実行した回数（checks/run-<n>.md の n）
   checksRuns?: number
+  // 失敗した checks の指紋の履歴（#34）。同じ指紋が続いたら進んでいないとみなす（#35）
+  fingerprints?: string[]
   // review を実行した回数（reviews/round-<n>/ の n）
   reviewRounds?: number
   // human: エスカレーションの後。以降は review-fix を自動で実行しない（戻さない。計画 8.3）
