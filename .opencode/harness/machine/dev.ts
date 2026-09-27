@@ -2,10 +2,11 @@
 import type { HarnessConfig } from "../config.ts"
 import type { Exec, Shell } from "../exec.ts"
 import type { ChildResult, RunChildOptions } from "../session.ts"
-import type { Store } from "../state.ts"
+import type { RunState, Store } from "../state.ts"
 import { runSetup } from "../steps/setup.ts"
 import { recordPlan, runPlan, waitApproval } from "../steps/plan.ts"
 import { runRed } from "../steps/red.ts"
+import { auditAfterStep } from "../steps/audit.ts"
 
 export type StepDeps = {
   root: string
@@ -30,6 +31,15 @@ export async function advance(deps: StepDeps, runId: string): Promise<StepResult
   if (!run) return { kind: "error", message: `run ${runId} がありません。harness_start で作成してください` }
   if (run.status === "interrupted") return { kind: "error", message: `${runId} は中断されています` }
   if (run.status === "escalated") return { kind: "escalated", message: `${runId} はエスカレーションされています（工程: ${run.step}）。/fix で対応してください` }
+  const result = await runStep(deps, run)
+  // テストがロックされた後の工程では、工程が終わるたびにテストファイルを監査する（#12）
+  return run.redCommit && AUDITED_STEPS.has(run.step) ? auditAfterStep(deps, run, result) : result
+}
+
+// red より後の、テスト以外のコードを変える工程
+const AUDITED_STEPS = new Set(["green", "checks", "review", "pr"])
+
+async function runStep(deps: StepDeps, run: RunState): Promise<StepResult> {
   switch (run.step) {
     case "setup":
       return runSetup(deps, run)
