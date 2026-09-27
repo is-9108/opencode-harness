@@ -74,6 +74,8 @@ export type Store = {
   list(): RunList
   save(run: RunState): RunState
   appendEvent(id: string, event: Record<string, unknown>): void
+  // events.jsonl の記録（古い順）。壊れた行は読み飛ばす
+  events(id: string): Record<string, unknown>[]
 }
 
 const STATE_FILE = "state.json"
@@ -132,6 +134,21 @@ export function createStore(root: string, now: () => Date = () => new Date()): S
     appendEvent(id, event) {
       mkdirSync(runDir(id), { recursive: true })
       appendFileSync(join(runDir(id), EVENTS_FILE), JSON.stringify({ t: now().toISOString(), ...event }) + "\n")
+    },
+
+    events(id) {
+      const path = join(runDir(id), EVENTS_FILE)
+      if (!existsSync(path)) return []
+      return readFileSync(path, "utf8")
+        .split(/\r?\n/)
+        .filter(Boolean)
+        .flatMap((line) => {
+          try {
+            return [JSON.parse(line) as Record<string, unknown>]
+          } catch {
+            return []
+          }
+        })
     },
   }
   return store

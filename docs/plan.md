@@ -211,7 +211,7 @@ scripts/install.mjs               # 開発対象のリポジトリへの導入
   },
   "dependencyManifests": ["package.json", "package-lock.json", "pnpm-lock.yaml"],
   "loops": { "testFix": 3, "reviewFix": 3, "autoFixBudget": 6, "reviewRoundsInHumanMode": 1, "sameFingerprintLimit": 2 },
-  "budget": { "maxTokensPerIssue": 5000000, "maxCostUsdPerIssue": 20, "warnAtRatio": 0.8 },
+  "budget": { "maxChildSessionsPerIssue": 40, "maxTokensPerIssue": 5000000, "maxCostUsdPerIssue": 20, "warnAtRatio": 0.8 },
   "context": { "compactAtTokens": 240000, "reserved": 20000, "prune": true },
   "git": { "branch": "feat/{issue}-{slug}", "baseBranch": "main", "worktreeRoot": "../{repo}.worktrees" }
 }
@@ -343,7 +343,8 @@ stateDiagram-v2
 | `autoFixBudget`（test-fix と review-fix の合計） | 6 | しない | エスカレーション |
 | **同じ指紋**（チェックの失敗） | 2 回連続 | — | 3 周を待たずにエスカレーション（`no_progress`） |
 | **指摘の再発・揺り戻し** | 一度解消した blocking 指摘が再び出る | — | エスカレーション（`oscillation`） |
-| **トークン / コストの予算** | `budget` | しない | 80% で警告、100% でエスカレーション（`budget`） |
+| **子セッションの数の予算**（M2） | `budget.maxChildSessionsPerIssue` | しない | 80% で警告、上限に達したら次の子セッションを作らずにエスカレーション（`budget`）。既存の子セッションに続きを送る（再開・書き直しの依頼）ときは数えない |
+| **トークン / コストの予算**（M3） | `budget` | しない | 80% で警告、100% でエスカレーション（`budget`） |
 | `mode` | — | エスカレーションで `human` にし、戻さない | human モードでは review-fix を自動で実行しない |
 
 - **指紋**: 失敗したテストの ID を並べ替えたものと、メッセージを正規化したもの（数値、パス、行番号を取り除く）のハッシュ。lint や型のエラーは、ルール ID とファイル名から作る。

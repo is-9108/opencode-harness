@@ -16,6 +16,7 @@ import { recordSpecGap, runSpecGap } from "../steps/spec-gap.ts"
 import { runPr } from "../steps/pr.ts"
 import { auditAfterStep } from "../steps/audit.ts"
 import { fixGuide } from "../steps/escalation.ts"
+import { BudgetExceeded, budgetedChild, budgetWarning, escalateBudget } from "../steps/budget.ts"
 
 export type StepDeps = {
   root: string
@@ -60,9 +61,20 @@ export async function advance(deps: StepDeps, runId: string): Promise<StepResult
     const detail = last ? `（${last.reason}）。報告: ${last.report}` : ""
     return { kind: "escalated", message: `${runId} はエスカレーションされています（工程: ${run.step}）${detail}\n${fixGuide(run)}` }
   }
-  const result = await runStep(deps, run)
+  // 新しい子セッションは、予算（数の上限）の範囲でだけ作る（#40）
+  const guarded: StepDeps = { ...deps, child: budgetedChild(deps) }
+  let result: StepResult
+  try {
+    result = await runStep(guarded, run)
+  } catch (e) {
+    if (e instanceof BudgetExceeded) return escalateBudget(deps, run.id, e)
+    throw e
+  }
   // テストがロックされた後の工程では、工程が終わるたびにテストファイルを監査する（#12）
-  return run.redCommit && AUDITED_STEPS.has(run.step) ? auditAfterStep(deps, run, result) : result
+  if (run.redCommit && AUDITED_STEPS.has(run.step)) result = await auditAfterStep(deps, run, result)
+  // 予算の 80% 以上を使っていれば、司令塔に警告を伝える
+  const warning = budgetWarning(deps, run.id)
+  return warning ? { ...result, message: `${result.message}\n${warning}` } : result
 }
 
 // red より後の、テスト以外のコードを変える工程

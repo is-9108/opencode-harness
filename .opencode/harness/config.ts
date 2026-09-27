@@ -30,7 +30,7 @@ export type HarnessConfig = {
   tests: { globs: string[]; flakyRetries: number }
   dependencyManifests: string[]
   loops: { testFix: number; reviewFix: number; autoFixBudget: number; reviewRoundsInHumanMode: number; sameFingerprintLimit: number }
-  budget: { maxTokensPerIssue: number; maxCostUsdPerIssue: number; warnAtRatio: number }
+  budget: { maxChildSessionsPerIssue: number; maxTokensPerIssue: number; maxCostUsdPerIssue: number; warnAtRatio: number }
   context: { compactAtTokens: number; reserved: number; prune: boolean }
   git: { branch: string; baseBranch: string; worktreeRoot: string }
   // worktree を作った直後に実行する依存のインストール（node_modules などは worktree にコピーされないため）
@@ -58,7 +58,7 @@ const DEFAULTS = {
   tests: { flakyRetries: 1 },
   dependencyManifests: ["package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock"],
   loops: { testFix: 3, reviewFix: 3, autoFixBudget: 6, reviewRoundsInHumanMode: 1, sameFingerprintLimit: 2 },
-  budget: { maxTokensPerIssue: 5_000_000, maxCostUsdPerIssue: 20, warnAtRatio: 0.8 },
+  budget: { maxChildSessionsPerIssue: 40, maxTokensPerIssue: 5_000_000, maxCostUsdPerIssue: 20, warnAtRatio: 0.8 },
   context: { compactAtTokens: 240_000, reserved: 20_000, prune: true },
   git: { branch: "feat/{issue}-{slug}", baseBranch: "main", worktreeRoot: "../{repo}.worktrees" },
   setup: { install: undefined as string | undefined, timeoutSec: 900 },
@@ -122,6 +122,7 @@ export function validateConfig(raw: unknown): { config?: HarnessConfig; errors: 
   for (const [key, value] of Object.entries(loops)) positiveInt(value, `loops.${key}`, err)
 
   const budget = section("budget", DEFAULTS.budget)
+  positiveInt(budget.maxChildSessionsPerIssue, "budget.maxChildSessionsPerIssue", err)
   positiveInt(budget.maxTokensPerIssue, "budget.maxTokensPerIssue", err)
   if (typeof budget.maxCostUsdPerIssue !== "number" || budget.maxCostUsdPerIssue <= 0) err("budget.maxCostUsdPerIssue", "正の数である必要があります")
   if (typeof budget.warnAtRatio !== "number" || budget.warnAtRatio <= 0 || budget.warnAtRatio >= 1) err("budget.warnAtRatio", "0 より大きく 1 より小さい数である必要があります")

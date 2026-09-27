@@ -55,7 +55,7 @@ export const fixer: Behave = (wt, call) => {
 }
 
 // "throw" は、子セッションの途中で opencode ごと落ちたことを表す
-export const setupLoop = (checks: { code: number; junit: string }[], behaviors: (Behave | "throw")[] = [], opts: { loops?: Record<string, number>; models?: Record<string, string[]> } = {}) => {
+export const setupLoop = (checks: { code: number; junit: string }[], behaviors: (Behave | "throw")[] = [], opts: { loops?: Record<string, number>; budget?: Record<string, number>; models?: Record<string, string[]> } = {}) => {
   const root = mkdtempSync(join(tmpdir(), "harness-testfix-"))
   const worktree = join(root, "wt")
   mkdirSync(join(worktree, "src"), { recursive: true })
@@ -84,6 +84,7 @@ export const setupLoop = (checks: { code: number; junit: string }[], behaviors: 
     checks: [{ name: "test", command: "npx vitest run", junit: "j.xml" }],
     tests: { globs: ["**/*.test.ts"], flakyRetries: 0 },
     ...(opts.loops ? { loops: opts.loops } : {}),
+    ...(opts.budget ? { budget: opts.budget } : {}),
   })
   assert.ok(config)
 
