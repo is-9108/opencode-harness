@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { readFrontmatter } from "../artifacts.ts"
 import type { StepDeps, StepResult } from "../machine/dev.ts"
 import type { RunState } from "../state.ts"
-import { baseChildPermissions, editOnly, readTemplate, runDir } from "./common.ts"
+import { baseBranchOf, baseChildPermissions, editOnly, readTemplate, runDir } from "./common.ts"
 import { planPath } from "./plan.ts"
 
 const MODEL_KEY = "dev.pr"
@@ -46,7 +46,7 @@ export async function runPr(deps: StepDeps, run: RunState): Promise<StepResult> 
   // 2. 投稿する本文を組み立てる（frontmatter を除き、差分が大きければ警告を先頭に、ハーネスの記録を末尾に足す）
   const raw = readFileSync(bodyPath, "utf8")
   const title = unquote(readFrontmatter(raw).title ?? "")
-  const diffLines = await countDiffLines(deps, worktree)
+  const diffLines = await countDiffLines(deps, worktree, baseBranchOf(deps.config, run))
   const finalBody = [
     ...(diffLines > LARGE_DIFF_LINES ? [`> [!WARNING]`, `> 差分が ${diffLines} 行あり、目安の ${LARGE_DIFF_LINES} 行を超えています。issue の分割を検討してください。`, ""] : []),
     stripFrontmatter(raw).trim(),
@@ -71,7 +71,7 @@ export async function runPr(deps: StepDeps, run: RunState): Promise<StepResult> 
     if (edit.code !== 0) return { kind: "error", message: `PR #${existing.number} を更新できませんでした: ${edit.stderr.trim()}` }
     pr = existing
   } else {
-    const create = await gh("pr", "create", "--base", deps.config.git.baseBranch, "--head", branch, "--title", title, "--body-file", finalPath)
+    const create = await gh("pr", "create", "--base", baseBranchOf(deps.config, run), "--head", branch, "--title", title, "--body-file", finalPath)
     if (create.code !== 0) return { kind: "error", message: `PR を作れませんでした: ${create.stderr.trim()}` }
     const url = create.stdout.trim().split(/\s+/).at(-1) ?? ""
     pr = { number: Number(url.split("/").at(-1)), url }
@@ -104,8 +104,8 @@ function validate(content: string, sections: string[], issue: number): string[] 
   return problems
 }
 
-async function countDiffLines(deps: StepDeps, worktree: string): Promise<number> {
-  const r = await deps.exec("git", ["diff", "--numstat", `${deps.config.git.baseBranch}...HEAD`, "--", ".", ":(exclude).opencode"], { cwd: worktree })
+async function countDiffLines(deps: StepDeps, worktree: string, base: string): Promise<number> {
+  const r = await deps.exec("git", ["diff", "--numstat", `${base}...HEAD`, "--", ".", ":(exclude).opencode"], { cwd: worktree })
   return r.stdout
     .split(/\r?\n/)
     .map((l) => l.split("\t"))
@@ -146,7 +146,7 @@ function writePrompt(deps: StepDeps, run: RunState, worktree: string, bodyPath: 
     `- テストの記録: ${join(dir, "02-red.md")}、${join(dir, "03-green-log.md")}`,
     `- checks の結果: ${join(dir, "checks", `run-${run.checksRuns ?? 1}.md`)}`,
     `- レビューの集計: ${join(dir, "reviews", `round-${run.reviewRounds ?? 1}`, "summary.md")}`,
-    `- 差分: git diff ${deps.config.git.baseBranch}...HEAD -- . ":(exclude).opencode"（ハーネス自身の .opencode/ の変更は PR の説明に含めない）`,
+    `- 差分: git diff ${baseBranchOf(deps.config, run)}...HEAD -- . ":(exclude).opencode"（ハーネス自身の .opencode/ の変更は PR の説明に含めない）`,
     "",
     `出力先: ${bodyPath}（このファイル以外は編集できない）。「関連 issue」には「Closes #${run.issue}」と書く。`,
     "",

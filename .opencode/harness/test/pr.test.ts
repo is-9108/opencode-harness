@@ -26,7 +26,7 @@ const body = (opts: { closes?: boolean; drop?: string; status?: string } = {}) =
 
 type Call = RunChildOptions & { runId: string }
 
-const setup = (bodies: (string | undefined)[], opts: { bigDiff?: boolean; existingPr?: boolean } = {}) => {
+const setup = (bodies: (string | undefined)[], opts: { bigDiff?: boolean; existingPr?: boolean; stacked?: boolean } = {}) => {
   const root = mkdtempSync(join(tmpdir(), "harness-pr-"))
   const origin = join(root, "origin.git")
   execFileSync("git", ["init", "-q", "--bare", "-b", "main", origin])
@@ -38,6 +38,8 @@ const setup = (bodies: (string | undefined)[], opts: { bigDiff?: boolean; existi
   git(worktree, "add", "-A")
   git(worktree, "commit", "-q", "-m", "base")
   git(worktree, "push", "-q", "origin", "main")
+  // 依存先の issue のブランチに積んだ run（#31）
+  if (opts.stacked) git(worktree, "branch", "feat/6-dep")
   git(worktree, "switch", "-q", "-c", "feat/7-slug")
   const lines = opts.bigDiff ? 320 : 3
   writeFileSync(join(worktree, "src", "slug.ts"), Array.from({ length: lines }, (_, i) => `export const v${i} = ${i}`).join("\n") + "\n")
@@ -53,7 +55,7 @@ const setup = (bodies: (string | undefined)[], opts: { bigDiff?: boolean; existi
 
   const store = createStore(root)
   const { run } = startRun(store, { kind: "dev", issue: 7 })
-  store.save({ ...run, step: "pr", worktree, branch: "feat/7-slug", checksRuns: 1, reviewRounds: 1 })
+  store.save({ ...run, step: "pr", worktree, branch: "feat/7-slug", checksRuns: 1, reviewRounds: 1, ...(opts.stacked ? { baseBranch: "feat/6-dep" } : {}) })
   // 子セッションのトークンの記録（PR 本文の「ハーネスの記録」に集計される）
   appendFileSync(join(root, ".harness", "runs", run.id, "events.jsonl"), JSON.stringify({ type: "child.completed", title: "issue-7: green", agent: "implementer", model: "openai/gpt-5.5", durationMs: 95000, tokens: { total: 12345 } }) + "\n")
 
@@ -114,6 +116,15 @@ test("pr-writer が書いた本文で、push して PR を作り、run を完了
   const run = store.get(runId)
   assert.equal(run?.status, "done")
   assert.equal(run?.prUrl, "https://github.com/o/r/pull/43")
+})
+
+test("依存先のブランチに積んだ run では、PR の base を依存先のブランチにする", async () => {
+  const { deps, gh, runId } = setup([body()], { stacked: true })
+  const result = await advance(deps, runId)
+  assert.equal(result.kind, "done")
+  const create = gh.find((a) => a[1] === "create")
+  assert.ok(create)
+  assert.equal(create[create.indexOf("--base") + 1], "feat/6-dep")
 })
 
 test("同じブランチの PR がすでにあれば、新しく作らずに本文を更新する", async () => {

@@ -5,7 +5,7 @@ import { join } from "node:path"
 import { readFrontmatter } from "../artifacts.ts"
 import type { StepDeps, StepResult } from "../machine/dev.ts"
 import type { RunState } from "../state.ts"
-import { baseChildPermissions, editOnly, readTemplate, runDir } from "./common.ts"
+import { baseBranchOf, baseChildPermissions, editOnly, readTemplate, runDir } from "./common.ts"
 import { planPath } from "./plan.ts"
 
 const PERSPECTIVE = "spec"
@@ -59,7 +59,7 @@ export async function runReview(deps: StepDeps, run: RunState): Promise<StepResu
 
   // レビューの入力: ベースからの差分（ハーネス自身の .opencode/ は除く）
   const diffPath = join(dir, "input.diff")
-  const diff = await deps.exec("git", ["diff", `${deps.config.git.baseBranch}...HEAD`, "--", ".", ":(exclude).opencode"], { cwd: worktree })
+  const diff = await deps.exec("git", ["diff", `${baseBranchOf(deps.config, run)}...HEAD`, "--", ".", ":(exclude).opencode"], { cwd: worktree })
   if (diff.code !== 0) return { kind: "error", message: `差分を取得できませんでした: ${diff.stderr.trim()}` }
   writeFileSync(diffPath, diff.stdout)
 

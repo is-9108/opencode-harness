@@ -63,7 +63,7 @@ test("分類や blocking の値が決まりに沿わない行は、不完全と�
 
 type Call = RunChildOptions & { runId: string }
 
-const setup = (outputs: (string | undefined)[], opts: { models?: Record<string, string[]> } = {}) => {
+const setup = (outputs: (string | undefined)[], opts: { models?: Record<string, string[]>; stacked?: boolean } = {}) => {
   const root = mkdtempSync(join(tmpdir(), "harness-review-"))
   const worktree = join(root, "wt")
   mkdirSync(join(worktree, "src"), { recursive: true })
@@ -71,6 +71,13 @@ const setup = (outputs: (string | undefined)[], opts: { models?: Record<string, 
   writeFileSync(join(worktree, "README.md"), "base\n")
   git(worktree, "add", "-A")
   git(worktree, "commit", "-q", "-m", "base")
+  // 依存先の issue のブランチに積んだ run（#31）: 依存先の変更はレビューの差分に含めない
+  if (opts.stacked) {
+    git(worktree, "switch", "-q", "-c", "feat/6-dep")
+    writeFileSync(join(worktree, "src", "dep.ts"), "export const dep = 1\n")
+    git(worktree, "add", "-A")
+    git(worktree, "commit", "-q", "-m", "dep")
+  }
   git(worktree, "switch", "-q", "-c", "feat/7-x")
   writeFileSync(join(worktree, "src", "slug.ts"), "export const slugify = (s: string) => s.replace(/ /g, '-')\n")
   mkdirSync(join(worktree, ".opencode"))
@@ -84,7 +91,7 @@ const setup = (outputs: (string | undefined)[], opts: { models?: Record<string, 
 
   const store = createStore(root)
   const { run } = startRun(store, { kind: "dev", issue: 7 })
-  store.save({ ...run, step: "review", worktree, branch: "feat/7-x" })
+  store.save({ ...run, step: "review", worktree, branch: "feat/7-x", ...(opts.stacked ? { baseBranch: "feat/6-dep" } : {}) })
   const { config } = validateConfig({
     models: opts.models ?? { "dev.review.spec": ["openai/gpt-6-sol"] },
     checks: [{ name: "test", command: "npm test", junit: "j.xml" }],
@@ -104,6 +111,14 @@ const setup = (outputs: (string | undefined)[], opts: { models?: Record<string, 
   const roundDir = join(worktree, ".harness", "run", "reviews", "round-1")
   return { deps, store, calls, roundDir, worktree, runId: run.id }
 }
+
+test("依存先のブランチに積んだ run では、依存先のブランチからの差分だけをレビューする", async () => {
+  const { deps, roundDir, runId } = setup([review([])], { stacked: true })
+  await advance(deps, runId)
+  const diff = readFileSync(join(roundDir, "input.diff"), "utf8")
+  assert.match(diff, /src\/slug\.ts/)
+  assert.doesNotMatch(diff, /src\/dep\.ts/)
+})
 
 test("blocking が 0 件なら、summary.md に blocking_count: 0 を書いて pr に進む", async () => {
   const { deps, store, calls, roundDir, runId } = setup([review([ADVISORY])])
