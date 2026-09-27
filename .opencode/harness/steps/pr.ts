@@ -115,14 +115,15 @@ async function countDiffLines(deps: StepDeps, worktree: string, base: string): P
 // events.jsonl の子セッションの記録を集計する（トークン数は LLM ではなくハーネスが数える）
 function harnessRecord(deps: StepDeps, run: RunState, diffLines: number): string {
   const path = join(deps.root, ".harness", "runs", run.id, "events.jsonl")
-  type Event = { type: string; title?: string; agent?: string; model?: string; durationMs?: number; tokens?: { total?: number }; excused?: string[]; resolved?: string[] }
+  type Event = { type: string; title?: string; agent?: string; model?: string; durationMs?: number; tokens?: { total?: number }; excused?: string[]; resolved?: string[]; flaky?: string[] }
   const events = (existsSync(path) ? readFileSync(path, "utf8").split(/\r?\n/) : []).filter(Boolean).map((l) => JSON.parse(l) as Event)
   const children = events.filter((e) => e.type === "child.completed")
-  // 最後の checks での、ベースラインの失敗の扱い（#32）
+  // 最後の checks での、ベースラインの失敗の扱い（#32）と flaky（#34）
   const lastChecks = events.filter((e) => e.type === "checks.completed").at(-1)
   const baselineLines = [
     ...(lastChecks?.excused?.length ? ["", "ベースラインの失敗として除外したもの（変更前から失敗していた）:", ...lastChecks.excused.map((e) => `- ${e}`)] : []),
     ...(lastChecks?.resolved?.length ? ["", "ベースラインの失敗が解消したもの:", ...lastChecks.resolved.map((r) => `- ${r}`)] : []),
+    ...(lastChecks?.flaky?.length ? ["", "flaky（実行し直すと結果が変わったテスト。判定には数えていない）:", ...lastChecks.flaky.map((f) => `- ${f}`)] : []),
   ]
   const n = (v: number) => v.toLocaleString("en-US")
   const total = children.reduce((s, e) => s + (e.tokens?.total ?? 0), 0)

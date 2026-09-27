@@ -6,6 +6,7 @@ import type { Check } from "../config.ts"
 import type { StepDeps, StepResult } from "../machine/dev.ts"
 import type { RunState } from "../state.ts"
 import { parseJUnit, type TestCaseResult } from "../testing/junit.ts"
+import { fingerprint, normalizeMessage } from "../testing/fingerprint.ts"
 import { runDir } from "./common.ts"
 import { escalate } from "./escalation.ts"
 import { errorLines, judge, readBaseline, testId, type Judged } from "./baseline.ts"
@@ -22,8 +23,8 @@ export type CheckOutcome = {
   junitMissing?: boolean
 }
 
-// ベースラインと照らした判定を加えた結果
-type Judgement = CheckOutcome & { judged: Judged }
+// flaky とベースラインを考慮した判定を加えた結果
+type Judgement = CheckOutcome & { judged: Judged; flaky: string[] }
 
 const OUTPUT_TAIL_LINES = 40
 
@@ -31,22 +32,24 @@ export async function runChecks(deps: StepDeps, run: RunState): Promise<StepResu
   const worktree = run.worktree
   if (!worktree) return { kind: "error", message: "worktree が記録されていません。setup からやり直してください" }
 
-  // ベースラインの失敗は除外して判定する（#32）
+  // 失敗したテストは再実行して flaky を見分け（#34）、ベースラインの失敗は除外して判定する（#32）
   const baseline = readBaseline(worktree)
   const outcomes: Judgement[] = []
   for (const check of deps.config.checks) {
-    const outcome = await runOne(deps, worktree, check)
+    const outcome = await runWithRetries(deps, worktree, check)
     outcomes.push({ ...outcome, judged: judge(outcome, baseline?.checks.find((c) => c.name === check.name)) })
   }
   const excused = outcomes.flatMap((o) => o.judged.excused)
   const resolved = outcomes.flatMap((o) => o.judged.resolved)
+  const flaky = outcomes.flatMap((o) => o.flaky)
 
   const n = (run.checksRuns ?? 0) + 1
   const passed = outcomes.every((o) => o.judged.passed)
+  const fp = passed ? undefined : failureFingerprint(outcomes)
   const dir = join(runDir(worktree), "checks")
   mkdirSync(dir, { recursive: true })
   const recordPath = join(dir, `run-${n}.md`)
-  writeFileSync(recordPath, render(n, outcomes, (deps.now?.() ?? new Date()).toISOString()))
+  writeFileSync(recordPath, render(n, outcomes, (deps.now?.() ?? new Date()).toISOString(), fp))
   deps.store.appendEvent(run.id, {
     type: "checks.completed",
     run: n,
@@ -54,22 +57,66 @@ export async function runChecks(deps: StepDeps, run: RunState): Promise<StepResu
     results: outcomes.map((o) => ({ name: o.check.name, passed: o.judged.passed, timedOut: o.timedOut, durationMs: o.durationMs })),
     excused,
     resolved,
+    flaky,
+    ...(fp ? { fingerprint: fp } : {}),
   })
 
   if (passed) {
     deps.store.save({ ...run, checksRuns: n, step: "review" })
-    return { kind: "continue", message: `checks がすべて通りました（${outcomes.map((o) => o.check.name).join("、")}）。記録: ${recordPath}。次の工程: review` }
+    const note = flaky.length ? `（flaky ${flaky.length} 件）` : ""
+    return { kind: "continue", message: `checks がすべて通りました（${outcomes.map((o) => o.check.name).join("、")}）${note}。記録: ${recordPath}。次の工程: review` }
   }
   // 修正のループ（test-fix）は #35 で入れる。それまでは、失敗したらエスカレーションする（上限 0 回のループとして扱う）
   const failed = outcomes.filter((o) => !o.judged.passed)
-  const latest = { ...run, checksRuns: n }
+  const latest = { ...run, checksRuns: n, fingerprints: [...(run.fingerprints ?? []), fp!] }
   deps.store.save(latest)
   return escalate(deps, latest, {
     reason: "loop_exhausted",
     summary: `checks が失敗しました（${failed.map((o) => o.check.name).join("、")}）。`,
-    history: [`checks ${n} 回目: 記録 ${recordPath}`],
-    open: failed.map((o) => `${o.check.name}: ${summary(o)}`),
+    history: [`checks ${n} 回目: 記録 ${recordPath}（失敗の指紋: ${fp}）`],
+    open: failed.flatMap((o) => [`${o.check.name}: ${summary(o)}`, ...stillFailing(o).map((t) => `${o.check.name}: ${testId(t)}`)]),
   })
+}
+
+// ベースラインの失敗として除外したものを除いた、失敗したテスト
+const stillFailing = (o: Judgement) => (o.tests?.failed ?? []).filter((t) => !o.judged.excused.includes(testId(t)))
+
+// 失敗したテストを含むチェックを、flakyRetries 回まで実行し直す。
+// すべての実行で失敗したテストだけを本当の失敗とし、実行によって結果が変わったテストは flaky として判定から外す
+async function runWithRetries(deps: StepDeps, worktree: string, check: Check): Promise<CheckOutcome & { flaky: string[] }> {
+  const first = await runOne(deps, worktree, check)
+  if (first.passed || first.timedOut || !first.tests?.failed.length) return { ...first, flaky: [] }
+
+  const runs = [first]
+  for (let i = 0; i < deps.config.tests.flakyRetries; i++) {
+    const again = await runOne(deps, worktree, check)
+    runs.push(again)
+    if (again.passed) break
+  }
+  const last = runs.at(-1)!
+  // 再実行でタイムアウトしたり、テストの結果が出なかったりしたら、その結果をそのまま使う
+  if (last.timedOut || !last.tests) return { ...last, flaky: [] }
+
+  const failedSets = runs.map((r) => new Set((r.tests?.failed ?? []).map(testId)))
+  const persistent = new Set([...failedSets[0]!].filter((id) => failedSets.every((s) => s.has(id))))
+  const flaky = [...new Set(failedSets.flatMap((s) => [...s]))].filter((id) => !persistent.has(id))
+  const failed = last.tests.failed.filter((t) => persistent.has(testId(t)))
+  return { ...last, passed: last.passed || (failed.length === 0 && !last.junitMissing), tests: { ...last.tests, failed }, flaky }
+}
+
+// 失敗の指紋（#34）。ベースラインと flaky を除いた、残りの失敗から作る
+function failureFingerprint(outcomes: Judgement[]): string {
+  const items = outcomes
+    .filter((o) => !o.judged.passed)
+    .flatMap((o) => {
+      const name = o.check.name
+      if (o.timedOut) return [`timeout:${name}`]
+      const tests = stillFailing(o).map((t) => `${testId(t)}|${normalizeMessage(t.message ?? "")}`)
+      const lines = o.errorLines.map((l) => `${name}|${normalizeMessage(l)}`)
+      const found = [...tests, ...(tests.length ? [] : lines)]
+      return [...(o.junitMissing ? [`junit-missing:${name}`] : []), ...(found.length ? found : [`failed:${name}`])]
+    })
+  return fingerprint(items)
 }
 
 export async function runOne(deps: StepDeps, worktree: string, check: Check): Promise<CheckOutcome> {
@@ -101,13 +148,16 @@ function summary(o: Judgement): string {
   return `${o.judged.passed ? "成功" : "失敗"}${tests}${excused}`
 }
 
-function render(n: number, outcomes: Judgement[], at: string): string {
+function render(n: number, outcomes: Judgement[], at: string, fp: string | undefined): string {
   const cell = (s: string) => s.replace(/\|/g, "\\|").replace(/\r?\n/g, " ")
   const excused = outcomes.flatMap((o) => o.judged.excused)
   const resolved = outcomes.flatMap((o) => o.judged.resolved)
+  const flaky = outcomes.flatMap((o) => o.flaky)
   const lines = [
     "---",
     `status: ${outcomes.every((o) => o.judged.passed) ? "passed" : "failed"}`,
+    ...(fp ? [`fingerprint: ${fp}`] : []),
+    `flaky: ${flaky.length}`,
     `baseline_excused: ${excused.length}`,
     `baseline_resolved: ${resolved.length}`,
     `run: ${n}`,
@@ -125,6 +175,8 @@ function render(n: number, outcomes: Judgement[], at: string): string {
   if (excused.length > 0)
     lines.push("", "## ベースラインの失敗として除外したもの", "", "変更を加える前から失敗していたため、判定から除外した（00-baseline.md）。", "", ...excused.map((e) => `- ${e}`))
   if (resolved.length > 0) lines.push("", "## ベースラインの失敗が解消したもの", "", ...resolved.map((r) => `- ${r}`))
+  if (flaky.length > 0)
+    lines.push("", "## flaky（実行し直すと結果が変わったテスト。判定には数えない）", "", ...flaky.map((f) => `- ${f}`))
 
   const excusedIds = new Set(excused)
   const failedTests = outcomes.flatMap((o) => o.tests?.failed ?? []).filter((t) => !excusedIds.has(testId(t)))

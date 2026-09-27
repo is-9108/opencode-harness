@@ -127,16 +127,17 @@ test("依存先のブランチに積んだ run では、PR の base を依存先
   assert.equal(create[create.indexOf("--base") + 1], "feat/6-dep")
 })
 
-test("最後の checks でベースラインの失敗を除外した・解消したものがあれば、ハーネスの記録に載せる", async () => {
+test("最後の checks でベースラインの失敗を除外した・解消したもの、flaky があれば、ハーネスの記録に載せる", async () => {
   const { deps, gh, postedBody, runId } = setup([body()])
   appendFileSync(
     join(deps.root, ".harness", "runs", runId, "events.jsonl"),
-    JSON.stringify({ type: "checks.completed", run: 1, passed: true, excused: ["src/old.test.ts > 壊れたテスト"], resolved: ["src/legacy.test.ts > 直ったテスト"] }) + "\n",
+    JSON.stringify({ type: "checks.completed", run: 1, passed: true, excused: ["src/old.test.ts > 壊れたテスト"], resolved: ["src/legacy.test.ts > 直ったテスト"], flaky: ["src/a.test.ts > 不安定なテスト"] }) + "\n",
   )
   await advance(deps, runId)
   const posted = postedBody(gh.find((a) => a[1] === "create") ?? [])
   assert.match(posted, /ベースラインの失敗として除外.*\n.*src\/old\.test\.ts > 壊れたテスト/)
   assert.match(posted, /ベースラインの失敗が解消.*\n.*src\/legacy\.test\.ts > 直ったテスト/)
+  assert.match(posted, /flaky.*\n.*src\/a\.test\.ts > 不安定なテスト/)
 })
 
 test("同じブランチの PR がすでにあれば、新しく作らずに本文を更新する", async () => {
