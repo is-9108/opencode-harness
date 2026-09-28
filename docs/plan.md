@@ -105,7 +105,7 @@
 
 | ツール | 内容 |
 |---|---|
-| `harness_start(kind, arg)` | run を作る（`req` / `dev` / `fix`）。すでにあれば既存の run を返す |
+| `harness_start(kind, arg)` | run を作る（`req` / `dev`）。すでにあれば既存の run を返す。`fix` のときは run を作らず、エスカレーションした run の報告の要約と方針の選択肢を返す（エスカレーションしていなければ何もしない） |
 | `harness_status(runId?)` | 状態、工程、ループ回数、トークンとコスト、次にやること |
 | `harness_advance(runId)` | 自動で進められる工程を 1 つ実行する。戻り値は `continue` / `need_user`（何を聞くか、読むべき成果物）/ `escalated`（理由の種類）/ `waiting_quota`（再開できる時刻）/ `done` のいずれか |
 | `harness_record(runId, gate, decision, feedback?)` | 承認・修正指示・中断など、ユーザーの判断を記録する。spec_gap への回答もこのツールで記録する（gate: `spec_gap`、decision: `answered`、feedback に回答）。回答は `04-decisions.md` に追記し、issue へのコメントは `issue-comment-draft.md` に下書きを作るだけで投稿しない |
@@ -327,7 +327,7 @@ stateDiagram-v2
 | pr | 子 `pr-writer` → コード | テンプレートに沿って `pr-body.md` を作る（テスト結果、flaky、免除した指摘、blocking でない指摘、トークンとコスト）→ push → `gh pr create --body-file`（`Closes #N`）。**差分が 300 行を超えたら**、PR 本文に警告を載せる |
 
 **テストのロックの守り方（2 段構え）**
-1. **権限**: implementer / test-fixer / review-fixer の子セッションを作るときに、`tests.globs` から作った `edit` の deny ルールを `permission` で渡す（M0-7 で、セッションごとに権限を渡せることを確認済み）。harness-fix（司令塔）については、`/fix` の開始時に sync がエージェント定義の deny を更新する。
+1. **権限**: implementer / test-fixer / review-fixer の子セッションを作るときに、`tests.globs` から作った `edit` の deny ルールを `permission` で渡す（M0-7 で、セッションごとに権限を渡せることを確認済み）。harness-fix（司令塔）はセッションの作成時に権限を渡せないため、プラグインの `tool.execute.before` フックで、テストファイル（`tests.globs`）・ハーネスの成果物（修正の記録と変更申請を除く）・秘密情報への編集を拒否する（#41）。
 2. **コードでの監査**: 工程が終わるたびに、ロックしたハッシュと照合する。変わっていたら、ハーネスがテストファイルを元に戻し、その工程を失敗として扱う（test-integrity の観点 にも伝える）。
 
 **テストの変更申請**（テストのほうが仕様と合っていない場合）
@@ -410,7 +410,11 @@ stateDiagram-v2
 `escalation-<e>.md` に、**理由の種類**（`loop_exhausted` / `no_progress` / `oscillation` / `budget` / `test_change_request` / `dependency` / `safety` / `issue_changed`）、止まるまでの経緯、試した修正、diff の統計、未解決の論点を書く。司令塔はその要約を示し、次にやることを案内する。
 
 ### 8.6 修正（`/fix <issue>`、harness-fix が TUI で対話しながら行う）
-- **エスカレーションへの対応**: 報告、指摘、失敗ログ、`git diff <base>...HEAD`、計画を読み、方針を `question` ですり合わせてから、自分で直す。`fix-<e>.md` を書き、`harness_advance` で checks → review（human モードで 1 周だけ）へ進める。testFix の回数は 0 から数え直す。
+- **エスカレーションへの対応**: 報告、指摘、失敗ログ、`git diff <base>...HEAD`、計画を読み、方針を `question` ですり合わせてから、自分で直す。`fix-<e>.md` を書き、`harness_advance` で checks → review（human モードで 1 周だけ）へ進める。testFix の回数と失敗の指紋の履歴は 0 から数え直す（reviewFix と autoFixBudget は数え直さない）。
+  - `harness_start(kind: "fix")` が、報告の本文、材料のパス、方針の選択肢（直す / 指摘を免除して進める / テストの変更を申請する / 予算を見直して再開する / 今は止める。理由と工程に合うものだけ）を返す。
+  - `fix-<e>.md`（`status: done`、「## 方針」「## 修正」）ができていれば、`harness_advance` がテストのロックを照合してから commit し、checks に戻す。テストの変更申請が書かれていれば、再開の前に判断を求める。
+  - human モードのレビューで blocking が残れば、review-fix を実行せずに再びエスカレーションする。
+  - harness-fix は checks のコマンドと git の読み取りを確認なしで実行できる（プラグインの `permission.ask` フック）。それ以外のコマンドはユーザーに確認する。
 - **PR フィードバックモード**（PR がすでにあるとき）: コードが、PR のレビューコメント、`gh pr checks` の失敗、`gh run view --log-failed` を集めて `pr-feedback-<n>.md` にする。harness-fix は、その内容をもとに同じ流れで対応する。push はコードが行う。PR へのコメントの返信は、`question` で確認を取ってからにする。
 - harness-fix もテストファイルは編集できない。テストの変更が必要なら、変更申請の流れに乗せる。
 
